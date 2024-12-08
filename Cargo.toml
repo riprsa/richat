@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "plugin",
+]
+
+[workspace.package]
+authors = ["Lamports Dev"]
+edition = "2021"
+homepage = "https://lamports.dev"
+repository = "https://github.com/lamports-dev/richat"
+license = "AGPL-3.0-only"
+keywords = ["solana"]
+publish = false
+
+[workspace.dependencies]
+affinity = "0.1.2"
+agave-geyser-plugin-interface = "~2.1.1"
+anyhow = "1.0.62"
+cargo-lock = "10.0.1"
+clap = "4.5.23"
+git-version = "0.3.9"
+hostname = "0.4.0"
+http = "1.1.0"
+http-body-util = "0.1.2"
+hyper = "1.4.1"
+hyper-util = "0.1.7"
+lazy_static = "1.4.0"
+log = "0.4.22"
+prometheus = "0.13.4"
+serde = "1.0.145"
+serde_json = "1.0.86"
+solana-logger = "~2.1.1"
+solana-sdk = "~2.1.1"
+tokio = "1.42.0"
+vergen = "9.0.2"
+
+[workspace.lints.clippy]
+clone_on_ref_ptr = "deny"
+missing_const_for_fn = "deny"
+trivially_copy_pass_by_ref = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,9 @@
+# Solana
+test-ledger
+
+# Rust
+target
+
+# IDE
+.idea
+.vscode
