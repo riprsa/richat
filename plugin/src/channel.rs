@@ -1,7 +1,9 @@
 // Based on https://github.com/tokio-rs/tokio/blob/master/tokio/src/sync/broadcast.rs
 
 use {
-    crate::{config::ConfigChannel, protobuf::ProtobufMessage},
+    crate::{config::ConfigChannel, metrics, protobuf::ProtobufMessage},
+    agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
+    log::debug,
     solana_sdk::clock::Slot,
     std::{
         cell::UnsafeCell,
@@ -27,16 +29,17 @@ impl Sender {
         let mut buffer = Vec::with_capacity(max_messages);
         for i in 0..max_messages {
             buffer.push(RwLock::new(Item {
-                pos: (i as u64).wrapping_sub(max_messages as u64),
+                pos: i as u64,
                 slot: 0,
                 data: None,
+                closed: false,
             }));
         }
 
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
-                head: 0,
-                tail: 0,
+                head: max_messages as u64,
+                tail: max_messages as u64,
                 slots: BTreeMap::new(),
                 slots_max: config.max_slots,
                 bytes_total: 0,
@@ -50,14 +53,14 @@ impl Sender {
         Self { shared }
     }
 
-    pub fn push(&self, slot: Slot, message: ProtobufMessage) {
+    pub fn push(&self, message: ProtobufMessage) {
         thread_local! {
             // 16MiB should be enough for any message
             // except blockinfo with rewards list (what doesn't make sense after partition reward, starts from epoch 706)
             static BUFFER: UnsafeCell<Vec<u8>> = UnsafeCell::new(Vec::with_capacity(16 * 1024 * 1024));
         }
 
-        let message = BUFFER.with(|buffer| message.encode(unsafe { &mut *buffer.get() }));
+        let data = BUFFER.with(|buffer| message.encode(unsafe { &mut *buffer.get() }));
 
         // acquire state lock
         let mut state = self.shared.state_lock();
@@ -66,6 +69,7 @@ impl Sender {
         let pos = state.tail;
 
         // update slots info and drop extra messages by extra slots
+        let slot = message.get_slot();
         state.slots.entry(slot).or_insert(pos);
         while state.slots.len() > state.slots_max {
             let (slot, pos) = state
@@ -113,7 +117,7 @@ impl Sender {
         }
 
         // drop extra messages by max bytes
-        state.bytes_total += message.len();
+        state.bytes_total += data.len();
         while state.bytes_total > state.bytes_max {
             assert!(
                 state.head < state.tail,
@@ -144,12 +148,29 @@ impl Sender {
         }
         item.pos = pos;
         item.slot = slot;
-        item.data = Some(Arc::new(message));
+        item.data = Some(Arc::new(data));
         drop(item);
 
         // notify receivers
         for waker in state.wakers.drain(..) {
             waker.wake();
+        }
+
+        // update metrics
+        if let ProtobufMessage::Slot { status, .. } = message {
+            metrics::geyser_slot_status_set(slot, status);
+            if *status == SlotStatus::Processed {
+                debug!(
+                    "new processed {slot} / {} messages / {} slots / {} bytes",
+                    state.tail - state.head,
+                    state.slots.len(),
+                    state.bytes_total
+                );
+
+                metrics::channel_messages_set((state.tail - state.head) as usize);
+                metrics::channel_slots_set(state.slots.len());
+                metrics::channel_bytes_set(state.bytes_total);
+            }
         }
     }
 
@@ -172,6 +193,17 @@ impl Sender {
 
         Ok(Receiver { shared, next })
     }
+
+    pub fn close(&self) {
+        for idx in 0..self.shared.buffer.len() {
+            self.shared.buffer_idx_write(idx).closed = true;
+        }
+
+        let mut state = self.shared.state_lock();
+        for waker in state.wakers.drain(..) {
+            waker.wake();
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -193,10 +225,13 @@ impl Receiver {
         Recv::new(self).await
     }
 
-    fn recv_ref(&mut self, waker: &Waker) -> Result<Option<Arc<Vec<u8>>>, RecvError> {
+    pub fn recv_ref(&mut self, waker: &Waker) -> Result<Option<Arc<Vec<u8>>>, RecvError> {
         // read item with next value
         let idx = self.shared.get_idx(self.next);
         let mut item = self.shared.buffer_idx_read(idx);
+        if item.closed {
+            return Err(RecvError::Closed);
+        }
 
         if item.pos != self.next {
             // release lock before attempting to acquire state
@@ -207,6 +242,9 @@ impl Receiver {
 
             // make sure that position did not changed
             item = self.shared.buffer_idx_read(idx);
+            if item.closed {
+                return Err(RecvError::Closed);
+            }
             if item.pos != self.next {
                 return if item.pos < self.next {
                     state.wakers.push(waker.clone());
@@ -226,6 +264,8 @@ impl Receiver {
 pub enum RecvError {
     #[error("channel lagged")]
     Lagged,
+    #[error("channel closed")]
+    Closed,
 }
 
 struct Recv<'a> {
@@ -313,4 +353,5 @@ struct Item {
     pos: u64,
     slot: Slot,
     data: Option<Arc<Vec<u8>>>,
+    closed: bool,
 }

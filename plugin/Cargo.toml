@@ -22,25 +22,31 @@ affinity = { workspace = true }
 agave-geyser-plugin-interface = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["server-auto", "tokio"] }
+humantime-serde = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
+prost = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 solana-logger = { workspace = true }
 solana-sdk = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tonic = { workspace = true, features = ["server", "tls"] }
+yellowstone-grpc-proto = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
+tonic-build = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
 
 [lints]

@@ -1,6 +1,7 @@
 use {
     crate::{
-        channel::Sender, config::Config, metrics::PrometheusService, protobuf::ProtobufMessage,
+        channel::Sender, config::Config, grpc::GrpcServer, metrics::PrometheusService,
+        protobuf::ProtobufMessage,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
@@ -13,14 +14,20 @@ use {
         sync::atomic::{AtomicU64, Ordering},
         time::Duration,
     },
-    tokio::runtime::{Builder, Runtime},
+    tokio::{
+        runtime::{Builder, Runtime},
+        sync::broadcast,
+        task::JoinHandle,
+    },
 };
 
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
     messages: Sender,
-    prometheus: PrometheusService,
+    shutdown: broadcast::Sender<()>,
+    jh_grpc: Option<JoinHandle<()>>,
+    jh_prometheus: Option<JoinHandle<()>>,
 }
 
 impl PluginInner {
@@ -48,18 +55,44 @@ impl PluginInner {
         // Create messages store
         let messages = Sender::new(config.channel);
 
-        // Start prometheus server
-        let prometheus = runtime.block_on(async move {
-            let prometheus = PrometheusService::new(config.prometheus)
-                .await
-                .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
-            Ok::<_, GeyserPluginError>(prometheus)
-        })?;
+        // Spawn servers
+        let (tx, _rx) = broadcast::channel(1);
+        let (messages, tx, jh_grpc, jh_prometheus) = runtime
+            .block_on(async move {
+                // Start gRPC
+                let mut jh_grpc = None;
+                if let Some(config) = config.grpc {
+                    let mut rx = tx.subscribe();
+                    jh_grpc = Some(
+                        GrpcServer::spawn(config, messages.clone(), async move {
+                            let _ = rx.recv().await;
+                        })
+                        .await?,
+                    );
+                }
+
+                // Start prometheus server
+                let mut jh_prometheus = None;
+                if let Some(config) = config.prometheus {
+                    let mut rx = tx.subscribe();
+                    jh_prometheus = Some(
+                        PrometheusService::spawn(config, async move {
+                            let _ = rx.recv().await;
+                        })
+                        .await?,
+                    );
+                }
+
+                Ok::<_, anyhow::Error>((messages, tx, jh_grpc, jh_prometheus))
+            })
+            .map_err(|error| GeyserPluginError::Custom(format!("{error:?}").into()))?;
 
         Ok(Self {
             runtime,
             messages,
-            prometheus,
+            shutdown: tx,
+            jh_grpc,
+            jh_prometheus,
         })
     }
 }
@@ -93,8 +126,23 @@ impl GeyserPlugin for Plugin {
 
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
-            inner.prometheus.shutdown();
-            inner.runtime.shutdown_timeout(Duration::from_secs(30));
+            inner.messages.close();
+
+            let _ = inner.shutdown.send(());
+            inner.runtime.block_on(async {
+                if let Some(jh) = inner.jh_grpc {
+                    if let Err(error) = jh.await {
+                        error!("failed to join gRPC task: {error:?}");
+                    }
+                }
+                if let Some(jh) = inner.jh_prometheus {
+                    if let Err(error) = jh.await {
+                        error!("failed to join prometheus task: {error:?}");
+                    }
+                }
+            });
+
+            inner.runtime.shutdown_timeout(Duration::from_secs(10));
         }
     }
 
@@ -118,7 +166,7 @@ impl GeyserPlugin for Plugin {
             let inner = self.inner.as_ref().expect("initialized");
             inner
                 .messages
-                .push(slot, ProtobufMessage::Account { slot, account });
+                .push(ProtobufMessage::Account { slot, account });
         }
 
         Ok(())
@@ -135,14 +183,11 @@ impl GeyserPlugin for Plugin {
         status: &SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
-        inner.messages.push(
+        inner.messages.push(ProtobufMessage::Slot {
             slot,
-            ProtobufMessage::Slot {
-                slot,
-                parent,
-                status,
-            },
-        );
+            parent,
+            status,
+        });
 
         Ok(())
     }
@@ -162,7 +207,7 @@ impl GeyserPlugin for Plugin {
         let inner = self.inner.as_ref().expect("initialized");
         inner
             .messages
-            .push(slot, ProtobufMessage::Transaction { slot, transaction });
+            .push(ProtobufMessage::Transaction { slot, transaction });
 
         Ok(())
     }
@@ -177,9 +222,7 @@ impl GeyserPlugin for Plugin {
         };
 
         let inner = self.inner.as_ref().expect("initialized");
-        inner
-            .messages
-            .push(entry.slot, ProtobufMessage::Entry { entry });
+        inner.messages.push(ProtobufMessage::Entry { entry });
 
         Ok(())
     }
@@ -201,7 +244,7 @@ impl GeyserPlugin for Plugin {
         let inner = self.inner.as_ref().expect("initialized");
         inner
             .messages
-            .push(blockinfo.slot, ProtobufMessage::BlockMeta { blockinfo });
+            .push(ProtobufMessage::BlockMeta { blockinfo });
 
         Ok(())
     }
