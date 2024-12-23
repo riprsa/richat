@@ -1,24 +1,38 @@
+pub mod gen {
+    include!(concat!(env!("OUT_DIR"), "/geyser.Geyser.rs"));
+}
+
 use {
-    bytes::Bytes,
+    crate::{error::ReceiveError, stream::SubscribeStream},
+    bytes::{Buf, Bytes},
     futures::{
         channel::mpsc,
         sink::{Sink, SinkExt},
-        stream::Stream,
+        stream::{Stream, StreamExt},
     },
-    std::{collections::HashMap, time::Duration},
+    gen::geyser_client::GeyserClient,
+    pin_project_lite::pin_project,
+    prost::Message,
+    std::{
+        collections::HashMap,
+        fmt,
+        marker::PhantomData,
+        pin::Pin,
+        task::{Context, Poll},
+        time::Duration,
+    },
     tonic::{
-        codec::CompressionEncoding,
+        codec::{Codec, CompressionEncoding, DecodeBuf, Decoder, EncodeBuf, Encoder},
         metadata::{errors::InvalidMetadataValue, AsciiMetadataKey, AsciiMetadataValue},
         service::{interceptor::InterceptedService, Interceptor},
         transport::channel::{Channel, ClientTlsConfig, Endpoint},
         Request, Response, Status, Streaming,
     },
     yellowstone_grpc_proto::geyser::{
-        geyser_client::GeyserClient, CommitmentLevel, GetBlockHeightRequest,
-        GetBlockHeightResponse, GetLatestBlockhashRequest, GetLatestBlockhashResponse,
-        GetSlotRequest, GetSlotResponse, GetVersionRequest, GetVersionResponse,
-        IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest, PongResponse,
-        SubscribeRequest, SubscribeUpdate,
+        CommitmentLevel, GetBlockHeightRequest, GetBlockHeightResponse, GetLatestBlockhashRequest,
+        GetLatestBlockhashResponse, GetSlotRequest, GetSlotResponse, GetVersionRequest,
+        GetVersionResponse, IsBlockhashValidRequest, IsBlockhashValidResponse, PingRequest,
+        PongResponse, SubscribeRequest,
     },
 };
 
@@ -255,7 +269,7 @@ impl<F: Interceptor> GrpcClient<F> {
     ) -> Result<
         (
             impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-            impl Stream<Item = Result<SubscribeUpdate, Status>>,
+            GrpcClientStream,
         ),
         Status,
     > {
@@ -266,9 +280,11 @@ impl<F: Interceptor> GrpcClient<F> {
                 .await
                 .expect("failed to send to unbounded channel");
         }
-        let response: Response<Streaming<SubscribeUpdate>> =
-            self.geyser.subscribe(subscribe_rx).await?;
-        Ok((subscribe_tx, response.into_inner()))
+        let response: Response<Streaming<Vec<u8>>> = self.geyser.subscribe(subscribe_rx).await?;
+        let stream = GrpcClientStream {
+            stream: response.into_inner(),
+        };
+        Ok((subscribe_tx, stream))
     }
 
     pub async fn subscribe(
@@ -276,7 +292,7 @@ impl<F: Interceptor> GrpcClient<F> {
     ) -> Result<
         (
             impl Sink<SubscribeRequest, Error = mpsc::SendError>,
-            impl Stream<Item = Result<SubscribeUpdate, Status>>,
+            GrpcClientStream,
         ),
         Status,
     > {
@@ -286,7 +302,7 @@ impl<F: Interceptor> GrpcClient<F> {
     pub async fn subscribe_once(
         &mut self,
         request: SubscribeRequest,
-    ) -> Result<impl Stream<Item = Result<SubscribeUpdate, Status>>, Status> {
+    ) -> Result<GrpcClientStream, Status> {
         self.subscribe_with_request(Some(request))
             .await
             .map(|(_sink, stream)| stream)
@@ -350,5 +366,109 @@ impl<F: Interceptor> GrpcClient<F> {
         let request = Request::new(GetVersionRequest {});
         let response = self.geyser.get_version(request).await?;
         Ok(response.into_inner())
+    }
+}
+
+trait SubscribeMessage {
+    fn decode(buf: &mut DecodeBuf<'_>) -> Self;
+}
+
+impl SubscribeMessage for Vec<u8> {
+    fn decode(src: &mut DecodeBuf<'_>) -> Self {
+        let mut dst = Vec::with_capacity(src.remaining());
+        let mut start = 0;
+        while src.remaining() > 0 {
+            let chunk = src.chunk();
+            dst.as_mut_slice()[start..start + chunk.len()].copy_from_slice(chunk);
+            start += chunk.len();
+            src.advance(chunk.len());
+        }
+        dst
+    }
+}
+
+pub struct SubscribeCodec<T, U> {
+    _pd: PhantomData<(T, U)>,
+}
+
+impl<T, U> Default for SubscribeCodec<T, U> {
+    fn default() -> Self {
+        Self { _pd: PhantomData }
+    }
+}
+
+impl<T, U> Codec for SubscribeCodec<T, U>
+where
+    T: Message + Send + 'static,
+    U: SubscribeMessage + Default + Send + 'static,
+{
+    type Encode = T;
+    type Decode = U;
+
+    type Encoder = ProstEncoder<T>;
+    type Decoder = SubscribeDecoder<U>;
+
+    fn encoder(&mut self) -> Self::Encoder {
+        ProstEncoder(PhantomData)
+    }
+
+    fn decoder(&mut self) -> Self::Decoder {
+        SubscribeDecoder(PhantomData)
+    }
+}
+
+/// A [`Encoder`] that knows how to encode `T`.
+#[derive(Debug, Clone, Default)]
+pub struct ProstEncoder<T>(PhantomData<T>);
+
+impl<T: Message> Encoder for ProstEncoder<T> {
+    type Item = T;
+    type Error = Status;
+
+    fn encode(&mut self, item: Self::Item, buf: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
+        item.encode(buf)
+            .expect("Message only errors if not enough space");
+        Ok(())
+    }
+}
+
+/// A [`Decoder`] that knows how to decode `U`.
+#[derive(Debug, Clone, Default)]
+pub struct SubscribeDecoder<U>(PhantomData<U>);
+
+impl<U: SubscribeMessage + Default> Decoder for SubscribeDecoder<U> {
+    type Item = U;
+    type Error = Status;
+
+    fn decode(&mut self, buf: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
+        Ok(Some(SubscribeMessage::decode(buf)))
+    }
+}
+
+pin_project! {
+    pub struct GrpcClientStream {
+        #[pin]
+        stream: Streaming<Vec<u8>>,
+    }
+}
+
+impl GrpcClientStream {
+    pub fn into_parsed(self) -> SubscribeStream {
+        SubscribeStream::new(self.boxed())
+    }
+}
+
+impl fmt::Debug for GrpcClientStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrpcClientStream").finish()
+    }
+}
+
+impl Stream for GrpcClientStream {
+    type Item = Result<Vec<u8>, ReceiveError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let me = self.project();
+        me.stream.poll_next(cx).map_err(Into::into)
     }
 }
