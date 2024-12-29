@@ -3393,11 +3393,13 @@ dependencies = [
 name = "richat"
 version = "2.0.0"
 dependencies = [
+ "affinity",
  "anyhow",
  "cargo-lock",
  "clap",
  "futures",
  "git-version",
+ "humantime-serde",
  "json5",
  "lazy_static",
  "prometheus",
@@ -3409,6 +3411,8 @@ dependencies = [
  "solana-sdk",
  "thiserror 2.0.7",
  "tokio",
+ "tonic",
+ "tonic-build 0.12.3",
  "tracing",
  "tracing-subscriber",
  "vergen",
@@ -3478,7 +3482,6 @@ dependencies = [
  "criterion",
  "futures",
  "git-version",
- "hostname",
  "http 1.2.0",
  "lazy_static",
  "log",
@@ -3510,6 +3513,8 @@ version = "2.0.0"
 dependencies = [
  "affinity",
  "anyhow",
+ "futures",
+ "hostname",
  "http 1.2.0",
  "http-body-util",
  "humantime-serde",
@@ -3523,6 +3528,7 @@ dependencies = [
  "rustls 0.23.20",
  "rustls-pemfile 2.2.0",
  "serde",
+ "serde_json",
  "thiserror 2.0.7",
  "tokio",
  "tonic",
