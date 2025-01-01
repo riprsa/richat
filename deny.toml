@@ -11,10 +11,6 @@ ignore = [
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2022-0093
     "RUSTSEC-2022-0093",
 
-    # curve25519-dalek 3.2.0
-    # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0344
-    "RUSTSEC-2024-0344",
-
     # atty 0.2.14
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0375
     "RUSTSEC-2024-0375",

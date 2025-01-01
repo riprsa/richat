@@ -19,7 +19,7 @@ publish = false
 
 [workspace.dependencies]
 affinity = "0.1.2"
-agave-geyser-plugin-interface = "~2.1.1"
+agave-geyser-plugin-interface = "~2.0.15"
 anyhow = "1.0.62"
 bincode = "1.3.3"
 bs58 = "0.5.1"
@@ -49,8 +49,8 @@ prost_011 = { package = "prost", version = "0.11.9" }
 protobuf-src = "1.1.0"
 quinn = "0.11.6"
 rcgen = "0.13.1"
-richat-client = { path = "client", version = "2.0.0" }
-richat-plugin = { path = "plugin", version = "2.0.0" }
+richat-client = { path = "client", version = "1.0.0" }
+richat-plugin = { path = "plugin", version = "1.0.0" }
 richat-shared = { path = "shared", version = "0.0.0" }
 rustls = { version = "0.23.20", default-features = false }
 rustls-native-certs = "0.8.1"
@@ -60,11 +60,11 @@ serde_json = "1.0.86"
 serde_yaml = "0.9.33"
 signal-hook = "0.3.17"
 smallvec = "1.13.2"
-solana-account-decoder = "~2.1.1"
-solana-logger = "~2.1.1"
-solana-sdk = "~2.1.1"
-solana-storage-proto = "~2.1.1"
-solana-transaction-status = "~2.1.1"
+solana-account-decoder = "~2.0.15"
+solana-logger = "~2.0.15"
+solana-sdk = "~2.0.15"
+solana-storage-proto = "~2.0.15"
+solana-transaction-status = "~2.0.15"
 thiserror = "2.0.7"
 tokio = "1.42.0"
 tonic = "0.12.3"
@@ -73,7 +73,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 vergen = "9.0.2"
 webpki-roots = "0.26.7"
-yellowstone-grpc-proto = "4.1.0"
+yellowstone-grpc-proto = "3.1.1"
 
 [workspace.lints.clippy]
 clone_on_ref_ptr = "deny"
@@ -83,3 +83,8 @@ trivially_copy_pass_by_ref = "deny"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# https://github.com/anza-xyz/agave/blob/v2.0.4/Cargo.toml#L502-L533
+[patch.crates-io.curve25519-dalek]
+git = "https://github.com/anza-xyz/curve25519-dalek.git"
+rev = "b500cdc2a920cd5bff9e2dd974d7b97349d61464"

@@ -11,10 +11,6 @@ pub enum FuzzSlotStatus {
     Processed = 0,
     Rooted = 1,
     Confirmed = 2,
-    FirstShredReceived = 3,
-    Completed = 4,
-    CreatedBank = 5,
-    Dead = 6,
 }
 
 impl From<FuzzSlotStatus> for SlotStatus {
@@ -23,10 +19,6 @@ impl From<FuzzSlotStatus> for SlotStatus {
             FuzzSlotStatus::Processed => SlotStatus::Processed,
             FuzzSlotStatus::Rooted => SlotStatus::Rooted,
             FuzzSlotStatus::Confirmed => SlotStatus::Confirmed,
-            FuzzSlotStatus::FirstShredReceived => SlotStatus::FirstShredReceived,
-            FuzzSlotStatus::Completed => SlotStatus::Completed,
-            FuzzSlotStatus::CreatedBank => SlotStatus::CreatedBank,
-            FuzzSlotStatus::Dead => SlotStatus::Dead(String::new()),
         }
     }
 }

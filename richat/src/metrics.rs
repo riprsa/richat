@@ -85,7 +85,6 @@ pub fn channel_slot_set(message: &MessageSlot) {
         CommitmentLevel::Processed => Some("processed"),
         CommitmentLevel::Confirmed => Some("confirmed"),
         CommitmentLevel::Finalized => Some("finalized"),
-        _ => None,
     } {
         CHANNEL_SLOT
             .with_label_values(&[commitment])

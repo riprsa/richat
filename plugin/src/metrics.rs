@@ -90,10 +90,6 @@ pub fn geyser_slot_status_set(slot: Slot, status: &SlotStatus) {
         SlotStatus::Processed => Some("processed"),
         SlotStatus::Rooted => Some("finalized"),
         SlotStatus::Confirmed => Some("confirmed"),
-        SlotStatus::FirstShredReceived => Some("first_shred_received"),
-        SlotStatus::Completed => Some("completed"),
-        SlotStatus::CreatedBank => Some("created_bank"),
-        SlotStatus::Dead(_) => None,
     } {
         GEYSER_SLOT_STATUS
             .with_label_values(&[status])

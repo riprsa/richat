@@ -476,7 +476,6 @@ async fn main() -> anyhow::Result<()> {
                                 "slot": msg.slot,
                                 "parent": msg.parent,
                                 "status": status.as_str_name(),
-                                "deadError": msg.dead_error,
                             }),
                         );
                     }

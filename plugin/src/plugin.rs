@@ -184,13 +184,13 @@ impl GeyserPlugin for Plugin {
         &self,
         slot: Slot,
         parent: Option<u64>,
-        status: &SlotStatus,
+        status: SlotStatus,
     ) -> PluginResult<()> {
         let inner = self.inner.as_ref().expect("initialized");
         inner.messages.push(ProtobufMessage::Slot {
             slot,
             parent,
-            status,
+            status: &status,
         });
 
         Ok(())

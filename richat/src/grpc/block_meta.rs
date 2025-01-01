@@ -99,7 +99,6 @@ impl BlockMetaStorage {
                             CommitmentLevel::Processed => Some(processed),
                             CommitmentLevel::Confirmed => Some(confirmed),
                             CommitmentLevel::Finalized => Some(finalized),
-                            _ => None
                         }.and_then(|slot| blocks.get(&slot).cloned());
                         let _ = tx.send(block);
                     }
@@ -108,7 +107,6 @@ impl BlockMetaStorage {
                             CommitmentLevel::Processed => Some(processed),
                             CommitmentLevel::Confirmed => Some(confirmed),
                             CommitmentLevel::Finalized => Some(finalized),
-                            _ => None
                         }.and_then(|slot| blocks.get(&slot).cloned());
                         let value = if let (Some(block), Some(entry)) = (block, blockhashes.get(&blockhash)) {
                             let valid = block.block_height < entry.last_valid_block_height;

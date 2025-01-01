@@ -41,7 +41,7 @@ pub fn bench_encode_slot(criterion: &mut Criterion) {
                     #[allow(clippy::unit_arg)]
                     black_box({
                         for (slot, parent, status) in slots {
-                            let message = MessageSlot::from_geyser(*slot, *parent, status);
+                            let message = MessageSlot::from_geyser(*slot, *parent, **status);
                             let update = FilteredUpdate {
                                 filters: FilteredUpdateFilters::new(),
                                 message: FilteredUpdateOneof::slot(message),

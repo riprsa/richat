@@ -3,23 +3,11 @@ use {
     yellowstone_grpc_proto::geyser::CommitmentLevel,
 };
 
-const fn slot_status_as_i32(status: &SlotStatus) -> i32 {
+const fn slot_status_as_i32(status: SlotStatus) -> i32 {
     match status {
         SlotStatus::Processed => 0,
         SlotStatus::Rooted => 2,
         SlotStatus::Confirmed => 1,
-        SlotStatus::FirstShredReceived => 3,
-        SlotStatus::Completed => 4,
-        SlotStatus::CreatedBank => 5,
-        SlotStatus::Dead(_) => 6,
-    }
-}
-
-const fn slot_status_as_dead_error(status: &SlotStatus) -> Option<&String> {
-    if let SlotStatus::Dead(dead) = status {
-        Some(dead)
-    } else {
-        None
     }
 }
 
@@ -46,8 +34,7 @@ impl<'a> Slot<'a> {
 
 impl<'a> prost::Message for Slot<'a> {
     fn encode_raw(&self, buf: &mut impl bytes::BufMut) {
-        let status = slot_status_as_i32(self.status);
-        let dead_error = slot_status_as_dead_error(self.status);
+        let status = slot_status_as_i32(*self.status);
 
         if self.slot != 0u64 {
             encoding::uint64::encode(1u32, &self.slot, buf);
@@ -58,14 +45,10 @@ impl<'a> prost::Message for Slot<'a> {
         if status != CommitmentLevel::default() as i32 {
             encoding::int32::encode(3u32, &status, buf);
         }
-        if let Some(value) = dead_error {
-            encoding::string::encode(4u32, value, buf);
-        }
     }
 
     fn encoded_len(&self) -> usize {
-        let status = slot_status_as_i32(self.status);
-        let dead_error = slot_status_as_dead_error(self.status);
+        let status = slot_status_as_i32(*self.status);
 
         (if self.slot != 0u64 {
             encoding::uint64::encoded_len(1u32, &self.slot)
@@ -80,9 +63,6 @@ impl<'a> prost::Message for Slot<'a> {
             } else {
                 0
             }
-            + dead_error
-                .as_ref()
-                .map_or(0, |value| encoding::string::encoded_len(4u32, value))
     }
 
     fn merge_field(

@@ -403,6 +403,8 @@ impl QuicClientBuilderSecure {
     }
 }
 
+type QuicClientRecv = (RecvStream, u64, Vec<u8>);
+
 #[derive(Debug)]
 pub struct QuicClient {
     conn: Connection,
@@ -450,7 +452,7 @@ impl QuicClient {
         })
     }
 
-    async fn recv(mut stream: RecvStream) -> Result<(RecvStream, u64, Vec<u8>), ReceiveError> {
+    async fn recv(mut stream: RecvStream) -> Result<QuicClientRecv, ReceiveError> {
         let msg_id = stream.read_u64().await?;
         let error = msg_id == u64::MAX;
 
@@ -542,7 +544,7 @@ pin_project! {
             stream: Option<RecvStream>,
         },
         Read {
-            #[pin] future: BoxFuture<'static, Result<(RecvStream, u64, Vec<u8>), ReceiveError>>,
+            #[pin] future: BoxFuture<'static, Result<QuicClientRecv, ReceiveError>>,
         },
     }
 }

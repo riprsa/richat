@@ -109,10 +109,8 @@ pub mod fixtures {
     }
 
     pub fn generate_accounts() -> Vec<GeneratedAccount> {
-        const PUBKEY: Pubkey =
-            Pubkey::from_str_const("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu");
-        const OWNER: Pubkey =
-            Pubkey::from_str_const("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn");
+        const PUBKEY: Pubkey = solana_sdk::pubkey!("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu");
+        const OWNER: Pubkey = solana_sdk::pubkey!("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn");
 
         let blocks = load_predefined_blocks();
         let block = blocks
@@ -314,7 +312,7 @@ pub mod fixtures {
             (self.slot, self.parent, &self.status)
         }
 
-        pub fn to_prost(&self) -> SubscribeUpdateSlot {
+        pub const fn to_prost(&self) -> SubscribeUpdateSlot {
             SubscribeUpdateSlot {
                 slot: self.slot,
                 parent: self.parent,
@@ -322,16 +320,7 @@ pub mod fixtures {
                     SlotStatus::Processed => CommitmentLevel::Processed,
                     SlotStatus::Rooted => CommitmentLevel::Finalized,
                     SlotStatus::Confirmed => CommitmentLevel::Confirmed,
-                    SlotStatus::FirstShredReceived => CommitmentLevel::FirstShredReceived,
-                    SlotStatus::Completed => CommitmentLevel::Completed,
-                    SlotStatus::CreatedBank => CommitmentLevel::CreatedBank,
-                    SlotStatus::Dead(_error) => CommitmentLevel::Dead,
                 } as i32,
-                dead_error: if let SlotStatus::Dead(error) = &self.status {
-                    Some(error.clone())
-                } else {
-                    None
-                },
             }
         }
     }
@@ -344,11 +333,6 @@ pub mod fixtures {
                     SlotStatus::Processed,
                     SlotStatus::Rooted,
                     SlotStatus::Confirmed,
-                    SlotStatus::FirstShredReceived,
-                    SlotStatus::Completed,
-                    SlotStatus::CreatedBank,
-                    SlotStatus::Dead("".to_owned()),
-                    SlotStatus::Dead("42".to_owned()),
                 ] {
                     slots.push(GeneratedSlot {
                         slot,
