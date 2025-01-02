@@ -1,6 +1,6 @@
 use {
     criterion::{criterion_group, criterion_main},
-    richat_plugin::protobuf::ProtobufMessage,
+    richat_plugin::protobuf::{ProtobufEncoder, ProtobufMessage},
     std::cell::RefCell,
 };
 
@@ -15,11 +15,11 @@ thread_local! {
     static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(BUFFER_CAPACITY));
 }
 
-pub fn encode_protobuf_message(message: &ProtobufMessage) {
+pub fn encode_protobuf_message(message: &ProtobufMessage, encoder: ProtobufEncoder) -> Vec<u8> {
     BUFFER.with(|cell| {
         let mut borrow_mut = cell.borrow_mut();
         borrow_mut.clear();
-        message.encode(&mut borrow_mut);
+        message.encode(encoder, &mut borrow_mut)
     })
 }
 

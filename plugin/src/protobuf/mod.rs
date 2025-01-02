@@ -3,7 +3,7 @@ mod message;
 
 pub use {
     encoding::{Account, BlockMeta, Entry, Slot, Transaction},
-    message::ProtobufMessage,
+    message::{ProtobufEncoder, ProtobufMessage},
 };
 
 #[cfg(any(test, feature = "fixtures"))]
@@ -462,7 +462,7 @@ mod tests {
                 generate_accounts, generate_block_metas, generate_entries, generate_slots,
                 generate_transactions,
             },
-            ProtobufMessage,
+            ProtobufEncoder, ProtobufMessage,
         },
         prost::Message,
         std::time::SystemTime,
@@ -479,7 +479,11 @@ mod tests {
                 slot,
                 account: &replica,
             };
-            let vec_richat = msg_richat.encode_with_timestamp(&mut buffer, created_at);
+            let vec_richat1 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
+            let vec_richat2 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            assert_eq!(vec_richat1, vec_richat2, "account: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
                 filters: Vec::new(),
@@ -487,8 +491,7 @@ mod tests {
                 created_at: Some(created_at.into()),
             };
             let vec_prost = msg_prost.encode_to_vec();
-
-            assert_eq!(vec_richat, vec_prost, "account: {gen:?}",);
+            assert_eq!(vec_richat1, vec_prost, "account: {gen:?}");
         }
     }
 
@@ -501,7 +504,11 @@ mod tests {
             let msg_richat = ProtobufMessage::BlockMeta {
                 blockinfo: &replica,
             };
-            let vec_richat = msg_richat.encode_with_timestamp(&mut buffer, created_at);
+            let vec_richat1 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
+            let vec_richat2 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            assert_eq!(vec_richat1, vec_richat2, "block meta: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
                 filters: Vec::new(),
@@ -509,8 +516,7 @@ mod tests {
                 created_at: Some(created_at.into()),
             };
             let vec_prost = msg_prost.encode_to_vec();
-
-            assert_eq!(vec_richat, vec_prost, "block meta: {gen:?}",);
+            assert_eq!(vec_richat1, vec_prost, "block meta: {gen:?}");
         }
     }
 
@@ -521,7 +527,11 @@ mod tests {
         for gen in generate_entries() {
             let replica = gen.to_replica();
             let msg_richat = ProtobufMessage::Entry { entry: &replica };
-            let vec_richat = msg_richat.encode_with_timestamp(&mut buffer, created_at);
+            let vec_richat1 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
+            let vec_richat2 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            assert_eq!(vec_richat1, vec_richat2, "entry: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
                 filters: Vec::new(),
@@ -529,8 +539,7 @@ mod tests {
                 created_at: Some(created_at.into()),
             };
             let vec_prost = msg_prost.encode_to_vec();
-
-            assert_eq!(vec_richat, vec_prost, "entry: {gen:?}",)
+            assert_eq!(vec_richat1, vec_prost, "entry: {gen:?}");
         }
     }
 
@@ -545,7 +554,11 @@ mod tests {
                 parent,
                 status,
             };
-            let vec_richat = msg_richat.encode_with_timestamp(&mut buffer, created_at);
+            let vec_richat1 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
+            let vec_richat2 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            assert_eq!(vec_richat1, vec_richat2, "slot: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
                 filters: Vec::new(),
@@ -553,8 +566,7 @@ mod tests {
                 created_at: Some(created_at.into()),
             };
             let vec_prost = msg_prost.encode_to_vec();
-
-            assert_eq!(vec_richat, vec_prost, "slot: {gen:?}",)
+            assert_eq!(vec_richat1, vec_prost, "slot: {gen:?}");
         }
     }
 
@@ -568,7 +580,11 @@ mod tests {
                 slot,
                 transaction: &replica,
             };
-            let vec_richat = msg_richat.encode_with_timestamp(&mut buffer, created_at);
+            let vec_richat1 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
+            let vec_richat2 =
+                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            assert_eq!(vec_richat1, vec_richat2, "transaction: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
                 filters: Vec::new(),
@@ -576,8 +592,7 @@ mod tests {
                 created_at: Some(created_at.into()),
             };
             let vec_prost = msg_prost.encode_to_vec();
-
-            assert_eq!(vec_richat, vec_prost, "transaction: {gen:?}");
+            assert_eq!(vec_richat1, vec_prost, "transaction: {gen:?}");
 
             // use prost::{bytes::Buf, encoding};
             // fn read(mut buffer: &[u8]) -> &[u8] {
@@ -616,7 +631,7 @@ mod tests {
             //     &buffer[0..size as usize]
             // }
 
-            // let slice_richat = read(vec_richat.as_slice());
+            // let slice_richat = read(vec_richat1.as_slice());
             // let slice_prost = read(vec_prost.as_slice());
             // assert_eq!(slice_richat, slice_prost, "transaction: {gen:?}");
         }
