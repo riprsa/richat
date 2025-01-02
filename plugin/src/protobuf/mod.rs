@@ -471,7 +471,6 @@ mod tests {
 
     #[test]
     pub fn test_encode_account() {
-        let mut buffer = Vec::new();
         let created_at = SystemTime::now();
         for gen in generate_accounts() {
             let (slot, replica) = gen.to_replica();
@@ -479,10 +478,8 @@ mod tests {
                 slot,
                 account: &replica,
             };
-            let vec_richat1 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
-            let vec_richat2 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            let vec_richat1 = msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, created_at);
+            let vec_richat2 = msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, created_at);
             assert_eq!(vec_richat1, vec_richat2, "account: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
@@ -497,17 +494,14 @@ mod tests {
 
     #[test]
     pub fn test_encode_block_meta() {
-        let mut buffer = Vec::new();
         let created_at = SystemTime::now();
         for gen in generate_block_metas() {
             let replica = gen.to_replica();
             let msg_richat = ProtobufMessage::BlockMeta {
                 blockinfo: &replica,
             };
-            let vec_richat1 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
-            let vec_richat2 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            let vec_richat1 = msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, created_at);
+            let vec_richat2 = msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, created_at);
             assert_eq!(vec_richat1, vec_richat2, "block meta: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
@@ -522,15 +516,12 @@ mod tests {
 
     #[test]
     pub fn test_encode_entry() {
-        let mut buffer = Vec::new();
         let created_at = SystemTime::now();
         for gen in generate_entries() {
             let replica = gen.to_replica();
             let msg_richat = ProtobufMessage::Entry { entry: &replica };
-            let vec_richat1 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
-            let vec_richat2 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            let vec_richat1 = msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, created_at);
+            let vec_richat2 = msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, created_at);
             assert_eq!(vec_richat1, vec_richat2, "entry: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
@@ -545,7 +536,6 @@ mod tests {
 
     #[test]
     pub fn test_encode_slot() {
-        let mut buffer = Vec::new();
         let created_at = SystemTime::now();
         for gen in generate_slots() {
             let (slot, parent, status) = gen.to_replica();
@@ -554,10 +544,8 @@ mod tests {
                 parent,
                 status,
             };
-            let vec_richat1 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
-            let vec_richat2 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            let vec_richat1 = msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, created_at);
+            let vec_richat2 = msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, created_at);
             assert_eq!(vec_richat1, vec_richat2, "slot: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
@@ -572,7 +560,6 @@ mod tests {
 
     #[test]
     pub fn test_encode_transaction() {
-        let mut buffer = Vec::new();
         let created_at = SystemTime::now();
         for gen in generate_transactions() {
             let (slot, replica) = gen.to_replica();
@@ -580,10 +567,8 @@ mod tests {
                 slot,
                 transaction: &replica,
             };
-            let vec_richat1 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, &mut buffer, created_at);
-            let vec_richat2 =
-                msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, &mut buffer, created_at);
+            let vec_richat1 = msg_richat.encode_with_timestamp(ProtobufEncoder::Prost, created_at);
+            let vec_richat2 = msg_richat.encode_with_timestamp(ProtobufEncoder::Raw, created_at);
             assert_eq!(vec_richat1, vec_richat2, "transaction: {gen:?}");
 
             let msg_prost = SubscribeUpdate {
