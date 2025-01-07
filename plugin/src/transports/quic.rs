@@ -1,5 +1,8 @@
 use {
-    crate::channel::{Receiver, RecvError, Sender, SubscribeError},
+    crate::{
+        channel::{Receiver, ReceiverItem, RecvError, Sender, SubscribeError},
+        metrics,
+    },
     futures::future::{pending, FutureExt},
     log::{error, info},
     prost::Message,
@@ -13,7 +16,6 @@ use {
         collections::{BTreeSet, VecDeque},
         future::Future,
         io,
-        sync::Arc,
     },
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -46,6 +48,7 @@ impl QuicServer {
 
                         let messages = messages.clone();
                         tokio::spawn(async move {
+                            metrics::connections_total_add(metrics::ConnectionsTransport::Quic);
                             if let Err(error) = Self::handle_incoming(
                                 id, incoming, messages, config.max_recv_streams
                             ).await {
@@ -53,10 +56,12 @@ impl QuicServer {
                             } else {
                                 info!("#{id}: connection closed");
                             }
+                            metrics::connections_total_dec(metrics::ConnectionsTransport::Quic);
                         });
                         id += 1;
                     }
                     () = &mut shutdown => {
+                        endpoint.close(0u32.into(), b"shutdown");
                         info!("shutdown");
                         break
                     },
@@ -87,7 +92,7 @@ impl QuicServer {
 
         let mut msg_id = 0;
         let mut msg_ids = BTreeSet::new();
-        let mut next_message: Option<Arc<Vec<u8>>> = None;
+        let mut next_message: Option<ReceiverItem> = None;
         let mut set = JoinSet::new();
         loop {
             if msg_id - msg_ids.first().copied().unwrap_or(msg_id) < max_backlog {

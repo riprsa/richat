@@ -4,7 +4,7 @@ use {
     prometheus::{IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry},
     richat_shared::config::ConfigPrometheus,
     solana_sdk::clock::Slot,
-    std::{future::Future, sync::Once},
+    std::{future::Future, io, sync::Once},
     tokio::task::JoinError,
 };
 
@@ -40,16 +40,17 @@ lazy_static::lazy_static! {
         "channel_bytes_total", "Total size of all messages in channel"
     ).unwrap();
 
-    // gRPC
-    static ref GRPC_CONNECTIONS_TOTAL: IntGauge = IntGauge::new(
-        "grpc_connections_total", "Total number of connections"
+    // Connections
+    static ref CONNECTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("connections_total", "Total number of connections"),
+        &["transport"]
     ).unwrap();
 }
 
 pub async fn spawn_server(
     config: ConfigPrometheus,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
+) -> io::Result<impl Future<Output = Result<(), JoinError>>> {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
         macro_rules! register {
@@ -65,7 +66,7 @@ pub async fn spawn_server(
         register!(CHANNEL_MESSAGES_TOTAL);
         register!(CHANNEL_SLOTS_TOTAL);
         register!(CHANNEL_BYTES_TOTAL);
-        register!(GRPC_CONNECTIONS_TOTAL);
+        register!(CONNECTIONS_TOTAL);
 
         VERSION
             .with_label_values(&[
@@ -80,9 +81,7 @@ pub async fn spawn_server(
             .inc();
     });
 
-    richat_shared::metrics::spawn_server(config, || REGISTRY.gather(), shutdown)
-        .await
-        .map_err(Into::into)
+    richat_shared::metrics::spawn_server(config, || REGISTRY.gather(), shutdown).await
 }
 
 pub fn geyser_slot_status_set(slot: Slot, status: &SlotStatus) {
@@ -119,10 +118,31 @@ pub fn channel_bytes_set(count: usize) {
     CHANNEL_BYTES_TOTAL.set(count as i64)
 }
 
-pub fn grpc_connection_new() {
-    GRPC_CONNECTIONS_TOTAL.inc();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionsTransport {
+    Grpc,
+    Quic,
+    Tcp,
 }
 
-pub fn grpc_connection_drop() {
-    GRPC_CONNECTIONS_TOTAL.dec();
+impl ConnectionsTransport {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Grpc => "grpc",
+            Self::Quic => "quic",
+            Self::Tcp => "tcp",
+        }
+    }
+}
+
+pub fn connections_total_add(transport: ConnectionsTransport) {
+    CONNECTIONS_TOTAL
+        .with_label_values(&[transport.as_str()])
+        .inc();
+}
+
+pub fn connections_total_dec(transport: ConnectionsTransport) {
+    CONNECTIONS_TOTAL
+        .with_label_values(&[transport.as_str()])
+        .dec();
 }

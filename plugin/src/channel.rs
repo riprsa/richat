@@ -276,6 +276,8 @@ pub enum SubscribeError {
     SlotNotAvailable { first_available: Slot },
 }
 
+pub type ReceiverItem = Arc<Vec<u8>>;
+
 #[derive(Debug)]
 pub struct Receiver {
     shared: Arc<Shared>,
@@ -283,11 +285,11 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    pub async fn recv(&mut self) -> Result<Arc<Vec<u8>>, RecvError> {
+    pub async fn recv(&mut self) -> Result<ReceiverItem, RecvError> {
         Recv::new(self).await
     }
 
-    pub fn recv_ref(&mut self, waker: &Waker) -> Result<Option<Arc<Vec<u8>>>, RecvError> {
+    pub fn recv_ref(&mut self, waker: &Waker) -> Result<Option<ReceiverItem>, RecvError> {
         // read item with next value
         let idx = self.shared.get_idx(self.next);
         let mut item = self.shared.buffer_idx_read(idx);
@@ -322,7 +324,7 @@ impl Receiver {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RecvError {
     #[error("channel lagged")]
     Lagged,
@@ -341,7 +343,7 @@ impl<'a> Recv<'a> {
 }
 
 impl<'a> Future for Recv<'a> {
-    type Output = Result<Arc<Vec<u8>>, RecvError>;
+    type Output = Result<ReceiverItem, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = self.get_mut();
