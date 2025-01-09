@@ -30,14 +30,12 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
-http = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 prost_011 = { workspace = true, optional = true }
 prost-types = { workspace = true }
-quinn = { workspace = true }
 richat-shared = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -47,9 +45,7 @@ solana-logger = { workspace = true }
 solana-sdk = { workspace = true }
 solana-storage-proto = { workspace = true, optional = true }
 solana-transaction-status = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-tonic = { workspace = true, features = ["server", "tls"] }
 yellowstone-grpc-proto = { workspace = true }
 
 [dev-dependencies]
@@ -62,7 +58,6 @@ yellowstone-grpc-proto = { workspace = true, features = ["plugin"] }
 anyhow = { workspace = true }
 cargo-lock = { workspace = true }
 git-version = { workspace = true }
-tonic-build = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
 
 [features]
