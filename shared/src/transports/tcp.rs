@@ -18,6 +18,8 @@ pub struct ConfigTcpServer {
     pub keepalive: Option<bool>,
     pub nodelay: Option<bool>,
     pub send_buffer_size: Option<u32>,
+    /// Max request size in bytes
+    pub max_request_size: usize,
     #[serde(deserialize_with = "deserialize_x_token_set")]
     pub x_tokens: HashSet<Vec<u8>>,
 }
@@ -30,6 +32,7 @@ impl Default for ConfigTcpServer {
             keepalive: None,
             nodelay: None,
             send_buffer_size: None,
+            max_request_size: 1024,
             x_tokens: HashSet::new(),
         }
     }
