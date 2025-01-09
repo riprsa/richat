@@ -6,7 +6,9 @@ use {
         protobuf::{ProtobufEncoder, ProtobufMessage},
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus,
+    futures::stream::{Stream, StreamExt},
     log::{debug, error},
+    richat_shared::transports::{RecvError, RecvStream, Subscribe, SubscribeError},
     smallvec::SmallVec,
     solana_sdk::clock::Slot,
     std::{
@@ -17,7 +19,6 @@ use {
         sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
         task::{Context, Poll, Waker},
     },
-    thiserror::Error,
 };
 
 #[derive(Debug, Clone)]
@@ -236,7 +237,20 @@ impl Sender {
         }
     }
 
-    pub fn subscribe(&self, replay_from_slot: Option<Slot>) -> Result<Receiver, SubscribeError> {
+    pub fn close(&self) {
+        for idx in 0..self.shared.buffer.len() {
+            self.shared.buffer_idx_write(idx).closed = true;
+        }
+
+        let mut state = self.shared.state_lock();
+        for waker in state.wakers.drain(..) {
+            waker.wake();
+        }
+    }
+}
+
+impl Subscribe for Sender {
+    fn subscribe(&self, replay_from_slot: Option<Slot>) -> Result<RecvStream, SubscribeError> {
         let shared = Arc::clone(&self.shared);
 
         let state = shared.state_lock();
@@ -253,27 +267,13 @@ impl Sender {
         };
         drop(state);
 
-        Ok(Receiver { shared, next })
-    }
-
-    pub fn close(&self) {
-        for idx in 0..self.shared.buffer.len() {
-            self.shared.buffer_idx_write(idx).closed = true;
+        Ok(Receiver {
+            shared,
+            next,
+            finished: false,
         }
-
-        let mut state = self.shared.state_lock();
-        for waker in state.wakers.drain(..) {
-            waker.wake();
-        }
+        .boxed())
     }
-}
-
-#[derive(Debug, Error)]
-pub enum SubscribeError {
-    #[error("channel is not initialized yet")]
-    NotInitialized,
-    #[error("only available from slot {first_available}")]
-    SlotNotAvailable { first_available: Slot },
 }
 
 pub type ReceiverItem = Arc<Vec<u8>>;
@@ -282,6 +282,7 @@ pub type ReceiverItem = Arc<Vec<u8>>;
 pub struct Receiver {
     shared: Arc<Shared>,
     next: u64,
+    finished: bool,
 }
 
 impl Receiver {
@@ -324,14 +325,6 @@ impl Receiver {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum RecvError {
-    #[error("channel lagged")]
-    Lagged,
-    #[error("channel closed")]
-    Closed,
-}
-
 struct Recv<'a> {
     receiver: &'a mut Receiver,
 }
@@ -353,6 +346,26 @@ impl<'a> Future for Recv<'a> {
             Ok(Some(value)) => Poll::Ready(Ok(value)),
             Ok(None) => Poll::Pending,
             Err(error) => Poll::Ready(Err(error)),
+        }
+    }
+}
+
+impl Stream for Receiver {
+    type Item = Result<ReceiverItem, RecvError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let me = self.get_mut();
+        if me.finished {
+            return Poll::Ready(None);
+        }
+
+        match me.recv_ref(cx.waker()) {
+            Ok(Some(value)) => Poll::Ready(Some(Ok(value))),
+            Ok(None) => Poll::Pending,
+            Err(error) => {
+                me.finished = true;
+                Poll::Ready(Some(Err(error)))
+            }
         }
     }
 }
