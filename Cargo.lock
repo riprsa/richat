@@ -3354,7 +3354,7 @@ dependencies = [
  "indicatif",
  "prost 0.13.4",
  "richat-client",
- "richat-plugin",
+ "richat-plugin-agave",
  "richat-shared",
  "serde_json",
  "solana-sdk",
@@ -3410,7 +3410,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "richat-plugin"
+name = "richat-plugin-agave"
 version = "1.0.0"
 dependencies = [
  "affinity",
