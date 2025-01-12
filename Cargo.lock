@@ -3482,6 +3482,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "richat-filter"
+version = "2.0.0"
+dependencies = [
+ "arrayvec",
+ "base64 0.22.1",
+ "bs58",
+ "prost 0.13.4",
+ "prost-types 0.13.4",
+ "richat-shared",
+ "serde",
+ "smallvec",
+ "solana-sdk",
+ "spl-token-2022 6.0.0",
+ "thiserror 2.0.7",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
 name = "richat-plugin"
 version = "2.0.0"
 dependencies = [
