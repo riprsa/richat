@@ -1,7 +1,3 @@
-pub use crate::transports::proto::{
-    QuicSubscribeClose, QuicSubscribeCloseError, QuicSubscribeRequest, QuicSubscribeResponse,
-    QuicSubscribeResponseError,
-};
 use {
     crate::{
         config::deserialize_x_token_set,
@@ -16,6 +12,10 @@ use {
     quinn::{
         crypto::rustls::{NoInitialCipherSuite, QuicServerConfig},
         Connection, Endpoint, Incoming, SendStream, VarInt,
+    },
+    richat_proto::richat::{
+        QuicSubscribeClose, QuicSubscribeCloseError, QuicSubscribeRequest, QuicSubscribeResponse,
+        QuicSubscribeResponseError,
     },
     rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     serde::{
@@ -62,7 +62,7 @@ pub struct ConfigQuicServer {
     /// Max request size in bytes
     #[serde(default = "ConfigQuicServer::default_max_request_size")]
     pub max_request_size: usize,
-    #[serde(deserialize_with = "deserialize_x_token_set")]
+    #[serde(default, deserialize_with = "deserialize_x_token_set")]
     pub x_tokens: HashSet<Vec<u8>>,
 }
 

@@ -3019,6 +3019,7 @@ dependencies = [
  "prometheus",
  "prost 0.13.4",
  "prost-types 0.13.4",
+ "richat-proto",
  "richat-shared",
  "serde",
  "serde_json",
@@ -3029,7 +3030,6 @@ dependencies = [
  "solana-transaction-status",
  "tokio",
  "vergen",
- "yellowstone-grpc-proto",
 ]
 
 [[package]]
@@ -3046,6 +3046,18 @@ dependencies = [
  "solana-sdk",
  "solana-storage-proto",
  "solana-transaction-status",
+]
+
+[[package]]
+name = "richat-proto"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "cargo-lock",
+ "prost 0.13.4",
+ "protobuf-src",
+ "tonic-build 0.12.3",
+ "yellowstone-grpc-proto",
 ]
 
 [[package]]
@@ -3066,6 +3078,7 @@ dependencies = [
  "protobuf-src",
  "quinn",
  "rcgen",
+ "richat-proto",
  "rustls 0.23.20",
  "rustls-pemfile 2.2.0",
  "serde",
@@ -3076,7 +3089,6 @@ dependencies = [
  "tonic",
  "tonic-build 0.12.3",
  "tracing",
- "yellowstone-grpc-proto",
 ]
 
 [[package]]
