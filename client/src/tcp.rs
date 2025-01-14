@@ -10,7 +10,7 @@ use {
     },
     pin_project_lite::pin_project,
     prost::Message,
-    richat_proto::richat::{GrpcSubscribeRequest, QuicSubscribeClose, TcpSubscribeRequest},
+    richat_proto::richat::{QuicSubscribeClose, RichatFilter, TcpSubscribeRequest},
     richat_shared::transports::tcp::ConfigTcpServer,
     serde::Deserialize,
     solana_sdk::clock::Slot,
@@ -125,11 +125,13 @@ impl TcpClient {
     pub async fn subscribe(
         mut self,
         replay_from_slot: Option<Slot>,
+        filter: Option<RichatFilter>,
         x_token: Option<Vec<u8>>,
     ) -> Result<TcpClientStream, SubscribeError> {
         let message = TcpSubscribeRequest {
-            request: Some(GrpcSubscribeRequest { replay_from_slot }),
             x_token,
+            replay_from_slot,
+            filter,
         }
         .encode_to_vec();
         self.stream.write_u64(message.len() as u64).await?;

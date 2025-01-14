@@ -423,10 +423,11 @@ impl QuicServer {
 
         // Decode request
         let QuicSubscribeRequest {
-            request,
+            x_token,
             recv_streams,
             max_backlog,
-            x_token,
+            replay_from_slot,
+            filter,
         } = Message::decode(buf.as_slice())?;
 
         // verify access token
@@ -461,8 +462,7 @@ impl QuicServer {
             return Ok((send, msg, None));
         }
 
-        let replay_from_slot = request.and_then(|req| req.replay_from_slot);
-        Ok(match messages.subscribe(replay_from_slot) {
+        Ok(match messages.subscribe(replay_from_slot, filter) {
             Ok(rx) => {
                 let pos = replay_from_slot
                     .map(|slot| format!("slot {slot}").into())
