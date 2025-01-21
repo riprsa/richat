@@ -1,6 +1,6 @@
 [package]
 name = "richat-plugin-agave"
-version = "1.0.0"
+version = "1.0.0+solana.2.0.22"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Richat Agave Geyser Plugin"
