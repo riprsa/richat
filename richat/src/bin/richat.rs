@@ -2,7 +2,7 @@ use {
     anyhow::Context,
     clap::Parser,
     futures::{
-        future::{pending, try_join_all, FutureExt, TryFutureExt},
+        future::{ready, try_join_all, FutureExt, TryFutureExt},
         stream::StreamExt,
     },
     richat::{channel, config::Config, grpc::server::GrpcServer},
@@ -83,6 +83,7 @@ fn main() -> anyhow::Result<()> {
         })?;
 
     // Create parser channel
+    let parser_cpus = config.channel.config.parser_affinity.clone();
     let messages = channel::Messages::new(config.channel.config, config.apps.grpc.is_some());
     let parser_jh = thread::Builder::new()
         .name("richatParser".to_owned())
@@ -90,6 +91,10 @@ fn main() -> anyhow::Result<()> {
             let shutdown = shutdown.clone();
             let mut messages = messages.to_sender();
             move || {
+                if let Some(cpus) = parser_cpus {
+                    affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
+                }
+
                 const COUNTER_LIMIT: i32 = 10_000;
                 let mut counter = 0;
                 loop {
@@ -103,6 +108,9 @@ fn main() -> anyhow::Result<()> {
 
                     if let Some(message) = msg_rx.recv() {
                         messages.push(message)?;
+                    } else {
+                        counter += 9;
+                        sleep(Duration::from_micros(1));
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -116,9 +124,9 @@ fn main() -> anyhow::Result<()> {
             let runtime = config.apps.tokio.build_runtime("richatApp")?;
             runtime.block_on(async move {
                 let grpc_fut = if let Some(config) = config.apps.grpc {
-                    GrpcServer::spawn(config, messages, shutdown.clone())?.boxed()
+                    GrpcServer::spawn(config, messages.clone(), shutdown.clone())?.boxed()
                 } else {
-                    pending().boxed()
+                    ready(Ok(())).boxed()
                 };
 
                 let prometheus_fut = if let Some(config) = config.prometheus {
@@ -127,7 +135,7 @@ fn main() -> anyhow::Result<()> {
                         .map_err(anyhow::Error::from)
                         .boxed()
                 } else {
-                    pending().boxed()
+                    ready(Ok(())).boxed()
                 };
 
                 try_join_all(vec![grpc_fut, prometheus_fut])

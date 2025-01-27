@@ -37,7 +37,7 @@ use {
             Arc, Mutex, MutexGuard,
         },
         task::{Context, Poll, Waker},
-        thread,
+        thread::sleep,
         time::{Duration, SystemTime},
     },
     tonic::{
@@ -82,7 +82,7 @@ impl GrpcServer {
             let jh = ConfigAppsWorkers::run_once(
                 0,
                 "richatGrpcWrkBM".to_owned(),
-                vec![config.unary.affinity],
+                config.unary.affinity,
                 {
                     let messages = messages.clone();
                     let meta = meta.clone();
@@ -254,7 +254,7 @@ impl GrpcServer {
 
             let Some(message) = receiver.try_recv(CommitmentLevel::Processed, head)? else {
                 counter = COUNTER_LIMIT;
-                thread::sleep(Duration::from_millis(1));
+                sleep(Duration::from_micros(100));
                 continue;
             };
             head += 1;
@@ -298,7 +298,8 @@ impl GrpcServer {
 
             // get client and state
             let Some(client) = self.pop_client(prev_client.take()) else {
-                counter = COUNTER_LIMIT;
+                counter += 9;
+                sleep(Duration::from_micros(1));
                 continue;
             };
             let mut state = client.state_lock();
