@@ -1,5 +1,5 @@
 use {
-    crate::grpc::config::ConfigAppsGrpc,
+    crate::{grpc::config::ConfigAppsGrpc, pubsub::config::ConfigAppsPubsub},
     futures::future::{ready, try_join_all, TryFutureExt},
     richat_client::{grpc::ConfigGrpcClient, quic::ConfigQuicClient, tcp::ConfigTcpClient},
     richat_filter::message::MessageParserEncoding,
@@ -114,6 +114,8 @@ pub struct ConfigApps {
     pub tokio: ConfigTokio,
     /// gRPC app (fully compatible with Yellowstone Dragon's Mouth)
     pub grpc: Option<ConfigAppsGrpc>,
+    /// WebSocket app (fully compatible with Solana PubSub)
+    pub pubsub: Option<ConfigAppsPubsub>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,7 +172,7 @@ impl ConfigAppsWorkers {
         index: usize,
         name: String,
         cpus: Option<Vec<usize>>,
-        spawn_fn: impl FnOnce(usize) -> anyhow::Result<()> + Clone + Send + 'static,
+        spawn_fn: impl FnOnce(usize) -> anyhow::Result<()> + Send + 'static,
         shutdown: Shutdown,
     ) -> anyhow::Result<impl std::future::Future<Output = anyhow::Result<()>>> {
         let th = Builder::new().name(name).spawn(move || {

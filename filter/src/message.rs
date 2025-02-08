@@ -2,17 +2,22 @@ use {
     prost::Message as _,
     prost_types::Timestamp,
     richat_proto::{
+        convert_from,
         geyser::{
             subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccountInfo,
             SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
         },
-        solana::storage::confirmed_block::{TransactionError, TransactionStatusMeta},
+        solana::storage::confirmed_block::{Transaction, TransactionError, TransactionStatusMeta},
     },
     serde::{Deserialize, Serialize},
+    solana_account::ReadableAccount,
     solana_sdk::{
-        clock::Slot,
+        clock::{Epoch, Slot},
         pubkey::{Pubkey, PUBKEY_BYTES},
         signature::{Signature, SIGNATURE_BYTES},
+    },
+    solana_transaction_status::{
+        ConfirmedBlock, TransactionWithStatusMeta, VersionedTransactionWithStatusMeta,
     },
     std::{collections::HashSet, sync::Arc},
     thiserror::Error,
@@ -250,16 +255,27 @@ impl MessageParserProst {
                 UpdateOneof::TransactionStatus(_) => {
                     return Err(MessageParseError::InvalidUpdateMessage("TransactionStatus"))
                 }
-                UpdateOneof::Entry(entry) => Message::Entry(MessageEntry::Prost {
-                    entry,
-                    created_at,
-                    size: encoded_len,
-                }),
-                UpdateOneof::BlockMeta(block_meta) => Message::BlockMeta(MessageBlockMeta::Prost {
-                    block_meta,
-                    created_at,
-                    size: encoded_len,
-                }),
+                UpdateOneof::Entry(entry) => {
+                    let executed_transaction_count = entry.executed_transaction_count;
+                    Message::Entry(MessageEntry::Prost {
+                        entry,
+                        executed_transaction_count,
+                        created_at,
+                        size: encoded_len,
+                    })
+                }
+                UpdateOneof::BlockMeta(block_meta) => {
+                    let block_height = block_meta
+                        .block_height
+                        .map(|v| v.block_height)
+                        .ok_or(MessageParseError::FieldNotDefined("block_height"))?;
+                    Message::BlockMeta(MessageBlockMeta::Prost {
+                        block_meta,
+                        block_height,
+                        created_at,
+                        size: encoded_len,
+                    })
+                }
                 UpdateOneof::Block(message) => {
                     let accounts = message
                         .accounts
@@ -326,9 +342,11 @@ impl MessageParserProst {
                         .entries
                         .into_iter()
                         .map(|entry| {
+                            let executed_transaction_count = entry.executed_transaction_count;
                             let encoded_len = entry.encoded_len();
                             Arc::new(MessageEntry::Prost {
                                 entry,
+                                executed_transaction_count,
                                 created_at,
                                 size: encoded_len,
                             })
@@ -347,6 +365,10 @@ impl MessageParserProst {
                         entries_count: message.entries_count,
                     };
                     let encoded_len = block_meta.encoded_len();
+                    let block_height = block_meta
+                        .block_height
+                        .map(|v| v.block_height)
+                        .ok_or(MessageParseError::FieldNotDefined("block_height"))?;
 
                     Message::Block(MessageBlock {
                         accounts,
@@ -354,6 +376,7 @@ impl MessageParserProst {
                         entries,
                         block_meta: Arc::new(MessageBlockMeta::Prost {
                             block_meta,
+                            block_height,
                             created_at,
                             size: encoded_len,
                         }),
@@ -419,6 +442,20 @@ impl MessageSlot {
             Self::Prost { status, .. } => *status,
         }
     }
+
+    pub const fn parent(&self) -> Option<Slot> {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { parent, .. } => *parent,
+        }
+    }
+
+    pub const fn dead_error(&self) -> &Option<String> {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { dead_error, .. } => dead_error,
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -473,27 +510,6 @@ impl MessageAccount {
         }
     }
 
-    pub fn owner(&self) -> &Pubkey {
-        match self {
-            Self::Limited => todo!(),
-            Self::Prost { owner, .. } => owner,
-        }
-    }
-
-    pub fn lamports(&self) -> u64 {
-        match self {
-            Self::Limited => todo!(),
-            Self::Prost { account, .. } => account.lamports,
-        }
-    }
-
-    pub fn data(&self) -> &[u8] {
-        match self {
-            Self::Limited => todo!(),
-            Self::Prost { account, .. } => &account.data,
-        }
-    }
-
     pub fn write_version(&self) -> u64 {
         match self {
             Self::Limited => todo!(),
@@ -508,6 +524,43 @@ impl MessageAccount {
                 nonempty_txn_signature,
                 ..
             } => *nonempty_txn_signature,
+        }
+    }
+}
+
+impl ReadableAccount for MessageAccount {
+    fn lamports(&self) -> u64 {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { account, .. } => account.lamports,
+        }
+    }
+
+    fn data(&self) -> &[u8] {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { account, .. } => &account.data,
+        }
+    }
+
+    fn owner(&self) -> &Pubkey {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { owner, .. } => owner,
+        }
+    }
+
+    fn executable(&self) -> bool {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { account, .. } => account.executable,
+        }
+    }
+
+    fn rent_epoch(&self) -> Epoch {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { account, .. } => account.rent_epoch,
         }
     }
 }
@@ -595,6 +648,13 @@ impl MessageTransaction {
         Ok(account_keys)
     }
 
+    pub fn signature(&self) -> &Signature {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { signature, .. } => signature,
+        }
+    }
+
     pub fn vote(&self) -> bool {
         match self {
             Self::Limited => todo!(),
@@ -609,11 +669,36 @@ impl MessageTransaction {
         }
     }
 
-    pub fn signature(&self) -> &Signature {
+    pub fn error(&self) -> &Option<TransactionError> {
         match self {
             Self::Limited => todo!(),
-            Self::Prost { signature, .. } => signature,
+            Self::Prost { error, .. } => error,
         }
+    }
+
+    pub fn transaction(&self) -> Result<&Transaction, &'static str> {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { transaction, .. } => {
+                transaction.transaction.as_ref().ok_or("FieldNotDefined")
+            }
+        }
+    }
+
+    pub fn transaction_meta(&self) -> Result<&TransactionStatusMeta, &'static str> {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost { transaction, .. } => transaction.meta.as_ref().ok_or("FieldNotDefined"),
+        }
+    }
+
+    pub fn as_versioned_transaction_with_status_meta(
+        &self,
+    ) -> Result<VersionedTransactionWithStatusMeta, &'static str> {
+        Ok(VersionedTransactionWithStatusMeta {
+            transaction: convert_from::create_tx_versioned(self.transaction()?.clone())?,
+            meta: convert_from::create_tx_meta(self.transaction_meta()?.clone())?,
+        })
     }
 
     pub fn account_keys(&self) -> &HashSet<Pubkey> {
@@ -629,6 +714,7 @@ pub enum MessageEntry {
     Limited,
     Prost {
         entry: SubscribeUpdateEntry,
+        executed_transaction_count: u64,
         created_at: Timestamp,
         size: usize,
     },
@@ -662,6 +748,16 @@ impl MessageEntry {
             Self::Prost { size, .. } => *size,
         }
     }
+
+    pub fn executed_transaction_count(&self) -> u64 {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost {
+                executed_transaction_count,
+                ..
+            } => *executed_transaction_count,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -669,6 +765,7 @@ pub enum MessageBlockMeta {
     Limited,
     Prost {
         block_meta: SubscribeUpdateBlockMeta,
+        block_height: Slot,
         created_at: Timestamp,
         size: usize,
     },
@@ -710,10 +807,10 @@ impl MessageBlockMeta {
         }
     }
 
-    pub fn block_height(&self) -> Option<Slot> {
+    pub fn block_height(&self) -> Slot {
         match self {
             Self::Limited => todo!(),
-            Self::Prost { block_meta, .. } => block_meta.block_height.map(|v| v.block_height),
+            Self::Prost { block_height, .. } => *block_height,
         }
     }
 
@@ -763,6 +860,44 @@ impl MessageBlock {
             .sum::<usize>()
             + self.block_meta.size()
     }
+
+    pub fn as_confirmed_block(&self) -> Result<ConfirmedBlock, &'static str> {
+        Ok(match self.block_meta.as_ref() {
+            MessageBlockMeta::Limited => todo!(),
+            MessageBlockMeta::Prost { block_meta, .. } => ConfirmedBlock {
+                previous_blockhash: block_meta.parent_blockhash.clone(),
+                blockhash: block_meta.blockhash.clone(),
+                parent_slot: block_meta.parent_slot,
+                transactions: self
+                    .transactions
+                    .iter()
+                    .map(|tx| {
+                        tx.as_versioned_transaction_with_status_meta()
+                            .map(TransactionWithStatusMeta::Complete)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                rewards: block_meta
+                    .rewards
+                    .as_ref()
+                    .map(|r| {
+                        r.rewards
+                            .iter()
+                            .cloned()
+                            .map(convert_from::create_reward)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
+                num_partitions: block_meta
+                    .rewards
+                    .as_ref()
+                    .and_then(|r| r.num_partitions)
+                    .map(|np| np.num_partitions),
+                block_time: block_meta.block_time.map(|bt| bt.timestamp),
+                block_height: block_meta.block_height.map(|bh| bh.block_height),
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -777,11 +912,27 @@ impl From<Timestamp> for MessageBlockCreatedAt {
     }
 }
 
+impl From<MessageBlockCreatedAt> for Timestamp {
+    fn from(value: MessageBlockCreatedAt) -> Self {
+        match value {
+            MessageBlockCreatedAt::Limited => todo!(),
+            MessageBlockCreatedAt::Prost(timestamp) => timestamp,
+        }
+    }
+}
+
 impl MessageBlockCreatedAt {
     pub const fn encoding(&self) -> MessageParserEncoding {
         match self {
             Self::Limited => MessageParserEncoding::Limited,
             Self::Prost(_) => MessageParserEncoding::Prost,
+        }
+    }
+
+    pub fn as_millis(&self) -> u64 {
+        match self {
+            Self::Limited => todo!(),
+            Self::Prost(ts) => ts.seconds as u64 * 1_000 + (ts.nanos / 1_000_000) as u64,
         }
     }
 }

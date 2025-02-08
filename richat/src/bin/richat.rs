@@ -5,7 +5,7 @@ use {
         future::{ready, try_join_all, FutureExt, TryFutureExt},
         stream::StreamExt,
     },
-    richat::{channel, config::Config, grpc::server::GrpcServer},
+    richat::{channel, config::Config, grpc::server::GrpcServer, pubsub::server::PubSubServer},
     richat_shared::shutdown::Shutdown,
     signal_hook::{consts::SIGINT, iterator::Signals},
     std::{
@@ -84,7 +84,11 @@ fn main() -> anyhow::Result<()> {
 
     // Create parser channel
     let parser_cpus = config.channel.config.parser_affinity.clone();
-    let messages = channel::Messages::new(config.channel.config, config.apps.grpc.is_some());
+    let messages = channel::Messages::new(
+        config.channel.config,
+        config.apps.grpc.is_some(),
+        config.apps.pubsub.is_some(),
+    );
     let parser_jh = thread::Builder::new()
         .name("richatParser".to_owned())
         .spawn({
@@ -129,6 +133,12 @@ fn main() -> anyhow::Result<()> {
                     ready(Ok(())).boxed()
                 };
 
+                let pubsub_fut = if let Some(config) = config.apps.pubsub {
+                    PubSubServer::spawn(config, messages, shutdown.clone())?.boxed()
+                } else {
+                    ready(Ok(())).boxed()
+                };
+
                 let metrics_fut = if let Some(config) = config.metrics {
                     richat::metrics::spawn_server(config, shutdown)
                         .await?
@@ -138,7 +148,9 @@ fn main() -> anyhow::Result<()> {
                     ready(Ok(())).boxed()
                 };
 
-                try_join_all(vec![grpc_fut, metrics_fut]).await.map(|_| ())
+                try_join_all(vec![grpc_fut, pubsub_fut, metrics_fut])
+                    .await
+                    .map(|_| ())
             })
         }
     })?;

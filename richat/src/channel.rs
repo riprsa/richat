@@ -119,10 +119,9 @@ impl ParsedMessage {
 
 #[derive(Debug, Clone)]
 pub struct Messages {
-    grpc: bool,
     shared_processed: Arc<Shared>,
-    shared_confirmed: Arc<Shared>,
-    shared_finalized: Arc<Shared>,
+    shared_confirmed: Option<Arc<Shared>>,
+    shared_finalized: Option<Arc<Shared>>,
     max_messages: usize,
     max_slots: usize,
     max_bytes: usize,
@@ -130,17 +129,12 @@ pub struct Messages {
 }
 
 impl Messages {
-    pub fn new(config: ConfigChannelInner, grpc: bool) -> Self {
+    pub fn new(config: ConfigChannelInner, grpc: bool, pubsub: bool) -> Self {
         let max_messages = config.max_messages.next_power_of_two();
         Self {
-            grpc,
             shared_processed: Arc::new(Shared::new(max_messages)),
-            shared_confirmed: Arc::new(Shared::new(
-                grpc.then_some(max_messages).unwrap_or_default(),
-            )),
-            shared_finalized: Arc::new(Shared::new(
-                grpc.then_some(max_messages).unwrap_or_default(),
-            )),
+            shared_confirmed: (grpc || pubsub).then(|| Arc::new(Shared::new(max_messages))),
+            shared_finalized: (grpc || pubsub).then(|| Arc::new(Shared::new(max_messages))),
             max_messages,
             max_slots: config.max_slots,
             max_bytes: config.max_bytes,
@@ -154,18 +148,23 @@ impl Messages {
             slots_max: self.max_slots,
             bytes_max: self.max_bytes,
             slots: BTreeMap::new(),
-            grpc: self.grpc,
             processed: SenderShared::new(&self.shared_processed, self.max_messages),
-            confirmed: SenderShared::new(&self.shared_confirmed, self.max_messages),
-            finalized: SenderShared::new(&self.shared_finalized, self.max_messages),
+            confirmed: self
+                .shared_confirmed
+                .as_ref()
+                .map(|shared| SenderShared::new(shared, self.max_messages)),
+            finalized: self
+                .shared_finalized
+                .as_ref()
+                .map(|shared| SenderShared::new(shared, self.max_messages)),
         }
     }
 
     pub fn to_receiver(&self) -> ReceiverSync {
         ReceiverSync {
             shared_processed: Arc::clone(&self.shared_processed),
-            shared_confirmed: Arc::clone(&self.shared_confirmed),
-            shared_finalized: Arc::clone(&self.shared_finalized),
+            shared_confirmed: self.shared_confirmed.as_ref().map(Arc::clone),
+            shared_finalized: self.shared_finalized.as_ref().map(Arc::clone),
         }
     }
 
@@ -174,11 +173,11 @@ impl Messages {
         commitment: CommitmentLevel,
         replay_from_slot: Option<Slot>,
     ) -> Option<u64> {
-        let shared = match commitment {
-            CommitmentLevel::Processed => &self.shared_processed,
-            CommitmentLevel::Confirmed => &self.shared_confirmed,
-            CommitmentLevel::Finalized => &self.shared_finalized,
-        };
+        let shared = (match commitment {
+            CommitmentLevel::Processed => Some(&self.shared_processed),
+            CommitmentLevel::Confirmed => self.shared_confirmed.as_ref(),
+            CommitmentLevel::Finalized => self.shared_finalized.as_ref(),
+        })?;
 
         if let Some(replay_from_slot) = replay_from_slot {
             shared
@@ -241,10 +240,9 @@ pub struct Sender {
     slots_max: usize,
     bytes_max: usize,
     slots: BTreeMap<Slot, SlotInfo>,
-    grpc: bool,
     processed: SenderShared,
-    confirmed: SenderShared,
-    finalized: SenderShared,
+    confirmed: Option<SenderShared>,
+    finalized: Option<SenderShared>,
 }
 
 impl Sender {
@@ -267,33 +265,39 @@ impl Sender {
         // push messages
         for message in [Some(message), message_block].into_iter().flatten() {
             // push messages to confirmed / finalized
-            if self.grpc {
-                if let ParsedMessage::Slot(msg) = &message {
-                    self.confirmed.push(slot, message.clone());
-                    self.finalized.push(slot, message.clone());
-
-                    if let Some(sender_shared) = match msg.status() {
-                        SlotStatus::SlotConfirmed => Some(&mut self.confirmed),
-                        SlotStatus::SlotFinalized => Some(&mut self.finalized),
-                        _ => None,
-                    } {
+            if let ParsedMessage::Slot(msg) = &message {
+                if let Some(shared) = self.confirmed.as_mut() {
+                    if msg.status() == SlotStatus::SlotConfirmed {
                         if let Some(slot_info) = self.slots.get(&slot) {
-                            for message in slot_info.get_messages() {
-                                sender_shared.push(slot, message);
+                            for message in slot_info.get_messages_cloned() {
+                                shared.push(slot, message);
                             }
-                            sender_shared.try_clear(self.bytes_max, self.slots_max);
+                            shared.try_clear(self.bytes_max, self.slots_max);
                         }
                     }
+                    shared.push(slot, message.clone());
+                }
 
-                    // remove slot info
+                if let Some(shared) = self.finalized.as_mut() {
                     if msg.status() == SlotStatus::SlotFinalized {
-                        loop {
-                            match self.slots.keys().next().copied() {
-                                Some(slot_min) if slot_min <= slot => {
-                                    self.slots.remove(&slot_min);
-                                }
-                                _ => break,
+                        if let Some(mut slot_info) = self.slots.remove(&slot) {
+                            for message in slot_info.get_messages_owned() {
+                                shared.push(slot, message);
                             }
+                            shared.try_clear(self.bytes_max, self.slots_max);
+                        }
+                    }
+                    shared.push(slot, message.clone());
+                }
+
+                // remove slot info
+                if msg.status() == SlotStatus::SlotFinalized {
+                    loop {
+                        match self.slots.keys().next().copied() {
+                            Some(slot_min) if slot_min <= slot => {
+                                self.slots.remove(&slot_min);
+                            }
+                            _ => break,
                         }
                     }
                 }
@@ -444,8 +448,8 @@ impl SenderShared {
 #[derive(Debug)]
 pub struct ReceiverSync {
     shared_processed: Arc<Shared>,
-    shared_confirmed: Arc<Shared>,
-    shared_finalized: Arc<Shared>,
+    shared_confirmed: Option<Arc<Shared>>,
+    shared_finalized: Option<Arc<Shared>>,
 }
 
 impl ReceiverSync {
@@ -454,10 +458,12 @@ impl ReceiverSync {
         commitment: CommitmentLevel,
         head: u64,
     ) -> Result<Option<ParsedMessage>, RecvError> {
-        let shared = match commitment {
-            CommitmentLevel::Processed => &self.shared_processed,
-            CommitmentLevel::Confirmed => &self.shared_confirmed,
-            CommitmentLevel::Finalized => &self.shared_finalized,
+        let Some(shared) = (match commitment {
+            CommitmentLevel::Processed => Some(&self.shared_processed),
+            CommitmentLevel::Confirmed => self.shared_confirmed.as_ref(),
+            CommitmentLevel::Finalized => self.shared_finalized.as_ref(),
+        }) else {
+            return Err(RecvError::Closed);
         };
 
         let tail = shared.tail.load(Ordering::Relaxed);
@@ -705,10 +711,14 @@ impl SlotInfo {
         None
     }
 
-    fn get_messages(&self) -> impl Iterator<Item = ParsedMessage> + '_ {
+    fn get_messages_cloned(&self) -> impl Iterator<Item = ParsedMessage> + '_ {
         self.messages
             .iter()
             .filter_map(|item| item.as_ref().cloned())
+    }
+
+    fn get_messages_owned(&mut self) -> impl Iterator<Item = ParsedMessage> + '_ {
+        self.messages.drain(..).flatten()
     }
 }
 
