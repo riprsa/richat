@@ -10,9 +10,12 @@ use {
         SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
         SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
     },
-    richat_shared::config::{
-        deserialize_maybe_signature, deserialize_num_str, deserialize_pubkey_set,
-        deserialize_pubkey_vec,
+    richat_shared::{
+        config::{
+            deserialize_maybe_signature, deserialize_num_str, deserialize_pubkey_set,
+            deserialize_pubkey_vec,
+        },
+        five8::{pubkey_decode, pubkey_encode, signature_decode, signature_encode},
     },
     serde::{
         de::{self, Deserializer},
@@ -512,15 +515,16 @@ impl ConfigFilter {
         pubkeys
             .into_iter()
             .map(|pubkey| {
-                pubkey
-                    .parse()
-                    .map_err(|error| ConfigFilterError::Pubkey(pubkey, error))
+                pubkey_decode(&pubkey).map_err(|error| ConfigFilterError::Pubkey(pubkey, error))
             })
             .collect::<Result<Vec<_>, _>>()
     }
 
     fn conv_vec_pubkeys(pubkeys: Vec<Pubkey>) -> Vec<String> {
-        pubkeys.into_iter().map(|pk| pk.to_string()).collect()
+        pubkeys
+            .into_iter()
+            .map(|pk| pubkey_encode(&pk.to_bytes()))
+            .collect()
     }
 }
 
@@ -859,8 +863,7 @@ impl TryFrom<SubscribeRequestFilterTransactions> for ConfigFilterTransactions {
             signature: value
                 .signature
                 .map(|sig| {
-                    sig.parse()
-                        .map_err(|error| ConfigFilterError::Signature(sig, error))
+                    signature_decode(&sig).map_err(|error| ConfigFilterError::Signature(sig, error))
                 })
                 .transpose()?,
             account_include: ConfigFilter::parse_vec_pubkeys(value.account_include)?,
@@ -875,7 +878,7 @@ impl From<ConfigFilterTransactions> for SubscribeRequestFilterTransactions {
         Self {
             vote: value.vote,
             failed: value.failed,
-            signature: value.signature.map(|sig| sig.to_string()),
+            signature: value.signature.map(|sig| signature_encode(&sig.into())),
             account_include: ConfigFilter::conv_vec_pubkeys(value.account_include),
             account_exclude: ConfigFilter::conv_vec_pubkeys(value.account_exclude),
             account_required: ConfigFilter::conv_vec_pubkeys(value.account_required),
