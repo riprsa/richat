@@ -8,7 +8,7 @@ In addition to `Yellowstone Drangon's Mouth / Geyser gRPC` richat includes Solan
 
 ## Licensing
 
-The project is dual-licensed: the open-source uses the `Apache-2.0` license (`client`, `richat`, and `shared`), while everything else is licensed under the `AGPL-3.0-only`. The private version is licensed under a commercial license.
+The project is dual-licensed: the open-source uses the `Apache-2.0` license (`client`, `richat`, and `shared`), while everything else is licensed under the `AGPL-3.0-only`. The private version is licensed under a [commercial license](https://gist.github.com/fanatid/13f3d557c89efbf3b0c32a2d07345444#file-commercial-license-md).
 
 ## Richat support and enterprise version
 
@@ -122,6 +122,16 @@ flowchart LR
         end
     end
 
+    subgraph agave2 [**agave**]
+        subgraph geyser2 [richat-plugin-agave]
+        end
+    end
+
+    subgraph richat0 [**richat**]
+        subgraph richat0_server [richat-server]
+        end
+    end
+
     subgraph richat1 [**richat**]
         subgraph tokio1 [Tokio Runtime]
             richat1_tokio1_receiver(receiver)
@@ -170,6 +180,8 @@ flowchart LR
     client3(client)
 
     geyser1 -->|Tcp / gRPC / Quic<br/>full stream| richat1_tokio1_receiver
+    geyser2 -->|Tcp / gRPC / Quic<br/>full stream| richat1_tokio1_receiver
+    richat0_server -->|Tcp / gRPC / Quic<br/>full stream| richat1_tokio1_receiver
     richat1_tokio1_receiver --> richat1_channel
     richat1_channel --> richat1_blockmeta_recv_thread
     richat1_channel --> richat1_grpc_worker1

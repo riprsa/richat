@@ -4851,6 +4851,7 @@ dependencies = [
  "jsonrpsee-types",
  "lazy_static",
  "maplit",
+ "pin-project-lite",
  "prometheus",
  "prost 0.13.4",
  "prost-types 0.13.4",
@@ -5009,7 +5010,7 @@ dependencies = [
 
 [[package]]
 name = "richat-shared"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
  "affinity",
  "anyhow",

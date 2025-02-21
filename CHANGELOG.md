@@ -16,11 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-## 2025-02-16
+## 2025-02-20
 
 - richat-cli-v2.2.1
 - richat-filter-v2.4.0
 - richat-v2.3.0
+- richat-shared-v2.4.0
 
 ### Features
 
@@ -31,6 +32,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - filter: encode with slices ([#73](https://github.com/lamports-dev/richat/pull/73))
 - richat: remove parser thread ([#74](https://github.com/lamports-dev/richat/pull/74))
+- richat: support multiple sources ([#76](https://github.com/lamports-dev/richat/pull/76))
 
 ## 2025-02-11
 
