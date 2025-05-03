@@ -16,6 +16,20 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## 2025-05-03
+
+- richat-cli-v4.4.0
+- richat-client-v3.4.0
+- richat-filter-v3.4.0
+- richat-plugin-agave-v3.4.0
+- richat-v3.5.0
+- richat-shared-v3.4.0
+
+### Features
+
+- richat: detailed mismatch error message ([#107](https://github.com/lamports-dev/richat/pull/107))
+- shared: `accept Vec<u8>` instead of `serde_json::Value` ([#107](https://github.com/lamports-dev/richat/pull/107))
+
 ## 2025-04-21
 
 - richat-cli-v4.3.0
