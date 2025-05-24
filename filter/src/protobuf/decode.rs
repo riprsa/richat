@@ -202,9 +202,9 @@ impl UpdateOneofLimitedDecode {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct UpdateOneofLimitedDecodeAccount {
-    pub account: bool,
+    pub account: usize,
     pub pubkey: Pubkey,
     pub owner: Pubkey,
     pub lamports: u64,
@@ -212,9 +212,27 @@ pub struct UpdateOneofLimitedDecodeAccount {
     pub rent_epoch: Epoch,
     pub data: Range<usize>,
     pub txn_signature_offset: Option<usize>,
-    pub write_version: u64,
+    pub write_version: usize,
     pub slot: Slot,
     pub is_startup: bool,
+}
+
+impl Default for UpdateOneofLimitedDecodeAccount {
+    fn default() -> Self {
+        Self {
+            account: usize::MAX,
+            pubkey: Pubkey::default(),
+            owner: Pubkey::default(),
+            lamports: u64::default(),
+            executable: bool::default(),
+            rent_epoch: Epoch::default(),
+            data: Range::default(),
+            txn_signature_offset: Option::default(),
+            write_version: usize::default(),
+            slot: Slot::default(),
+            is_startup: bool::default(),
+        }
+    }
 }
 
 impl LimitedDecode for UpdateOneofLimitedDecodeAccount {
@@ -230,7 +248,7 @@ impl LimitedDecode for UpdateOneofLimitedDecodeAccount {
         match tag {
             1u32 => {
                 check_wire_type(WireType::LengthDelimited, wire_type)?;
-                self.account = true;
+                self.account = buf_len - buf.remaining();
                 self.account_merge(buf, buf_len).map_err(|mut error| {
                     error.push(STRUCT_NAME, "account");
                     error
@@ -354,8 +372,9 @@ impl UpdateOneofLimitedDecodeAccount {
                 Ok(())
             }
             7u32 => {
-                let value = &mut self.write_version;
-                encoding::uint64::merge(wire_type, value, buf, ctx).map_err(|mut error| {
+                self.write_version = buf_len - buf.remaining();
+                let mut value = 0;
+                encoding::uint64::merge(wire_type, &mut value, buf, ctx).map_err(|mut error| {
                     error.push(STRUCT_NAME, "write_version");
                     error
                 })

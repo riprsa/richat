@@ -4,7 +4,7 @@ use {
         UpdateOneofLimitedDecodeAccount, UpdateOneofLimitedDecodeEntry,
         UpdateOneofLimitedDecodeSlot, UpdateOneofLimitedDecodeTransaction,
     },
-    prost::Message as _,
+    prost::{encoding::decode_varint, Message as _},
     prost_types::Timestamp,
     richat_proto::{
         convert_from,
@@ -79,7 +79,7 @@ impl<'a> From<&'a Message> for MessageRef<'a> {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Slot(MessageSlot),
     Account(MessageAccount),
@@ -211,7 +211,7 @@ impl MessageParserLimited {
                         &data.as_slice()[range.start..range.end],
                     )?;
 
-                    if !message.account {
+                    if message.account == usize::MAX {
                         return Err(MessageParseError::FieldNotDefined("account"));
                     }
 
@@ -226,12 +226,15 @@ impl MessageParserLimited {
                         executable: message.executable,
                         rent_epoch: message.rent_epoch,
                         data: data_range,
-                        txn_signature_offset: message.txn_signature_offset,
-                        write_version: message.write_version,
+                        txn_signature_offset: message
+                            .txn_signature_offset
+                            .map(|offset| offset + range.start),
+                        write_version: message.write_version + range.start,
                         slot: message.slot,
                         is_startup: message.is_startup,
                         created_at,
                         buffer: data,
+                        account_offset: message.account + range.start,
                         range,
                     })
                 }
@@ -526,7 +529,7 @@ impl MessageParserProst {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageSlot {
     Limited {
         slot: Slot,
@@ -603,7 +606,7 @@ impl MessageSlot {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageAccount {
     Limited {
         pubkey: Pubkey,
@@ -613,11 +616,12 @@ pub enum MessageAccount {
         rent_epoch: Epoch,
         data: Range<usize>,
         txn_signature_offset: Option<usize>,
-        write_version: u64,
+        write_version: usize,
         slot: Slot,
         is_startup: bool,
         created_at: Timestamp,
         buffer: Vec<u8>,
+        account_offset: usize,
         range: Range<usize>,
     },
     Prost {
@@ -667,9 +671,16 @@ impl MessageAccount {
         }
     }
 
-    pub const fn write_version(&self) -> u64 {
+    pub fn write_version(&self) -> u64 {
         match self {
-            Self::Limited { write_version, .. } => *write_version,
+            Self::Limited {
+                write_version,
+                buffer,
+                ..
+            } => {
+                let mut buffer = &buffer.as_slice()[*write_version..];
+                decode_varint(&mut buffer).expect("already verified")
+            }
             Self::Prost { account, .. } => account.write_version,
         }
     }
@@ -723,7 +734,7 @@ impl ReadableAccount for MessageAccount {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageTransaction {
     Limited {
         signature: Signature,
@@ -889,7 +900,7 @@ impl MessageTransaction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageEntry {
     Limited {
         slot: Slot,
@@ -953,7 +964,7 @@ impl MessageEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageBlockMeta {
     Limited {
         block_meta: SubscribeUpdateBlockMeta,
@@ -1028,7 +1039,7 @@ impl MessageBlockMeta {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlock {
     pub accounts: Vec<Arc<MessageAccount>>,
     pub transactions: Vec<Arc<MessageTransaction>>,

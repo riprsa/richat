@@ -26,7 +26,6 @@ jsonrpsee-types = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-pin-project-lite = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 quanta = { workspace = true }
@@ -43,7 +42,6 @@ signal-hook = { workspace = true }
 smallvec = { workspace = true }
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true }
-solana-rpc = { workspace = true }
 solana-rpc-client-api = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
@@ -55,6 +53,9 @@ tokio-rustls = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "json"] }
+
+[dev-dependencies]
+const-hex = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }

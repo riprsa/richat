@@ -2,6 +2,10 @@ use {
     crate::{config::ConfigChannelInner, metrics},
     ::metrics::gauge,
     futures::stream::{Stream, StreamExt},
+    prost::{
+        bytes::Buf,
+        encoding::{decode_varint, encode_varint, encoded_len_varint},
+    },
     richat_filter::{
         filter::FilteredUpdate,
         message::{
@@ -12,9 +16,11 @@ use {
     richat_proto::{geyser::SlotStatus, richat::RichatFilter},
     richat_shared::transports::{RecvError, RecvItem, RecvStream, Subscribe, SubscribeError},
     smallvec::SmallVec,
-    solana_sdk::{clock::Slot, commitment_config::CommitmentLevel, pubkey::Pubkey},
+    solana_sdk::{
+        clock::Slot, commitment_config::CommitmentLevel, pubkey::Pubkey, signature::Signature,
+    },
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::{hash_map::Entry as HashMapEntry, BTreeMap, HashMap, HashSet},
         fmt,
         pin::Pin,
         sync::{
@@ -249,18 +255,19 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn push(&mut self, message: ParsedMessage, index_info: Option<(usize, usize)>) {
+    pub fn push(&mut self, message: Message, index_info: Option<(usize, usize)>) {
         let slot = message.slot();
 
         // get or create slot info
-        let messages = if let Some((index, streams)) = index_info {
+        let mut messages = SmallVec::<[ParsedMessage; 16]>::new();
+        let mut dedup_info = if let Some((index, streams_total)) = index_info {
             // return if we already processed and removed dedup for finalized slots
             if slot <= self.finalized_slot {
                 return;
             }
 
             // remove outdated info
-            if let ParsedMessage::Slot(msg) = &message {
+            if let Message::Slot(msg) = &message {
                 if msg.status() == SlotStatus::SlotFinalized {
                     self.finalized_slot = slot;
                     loop {
@@ -278,155 +285,183 @@ impl Sender {
             let dedup = self
                 .dedup
                 .entry(slot)
-                .or_insert_with(|| DedupInfo::new(streams));
+                .or_insert_with(|| DedupInfo::new(streams_total));
 
-            let message = match message {
-                ParsedMessage::Slot(msg) => {
+            match message {
+                Message::Slot(msg) => {
                     let index = msg.status() as i32 as usize;
-                    if dedup.slots[index] {
-                        return;
+                    if !dedup.slots[index] {
+                        dedup.slots[index] = true;
+                        messages.push(ParsedMessage::Slot(Arc::new(msg)));
                     }
-                    dedup.slots[index] = true;
-                    ParsedMessage::Slot(msg)
                 }
-                ParsedMessage::Account(msg) => {
-                    let msg = ParsedMessage::Account(msg);
-                    if dedup.block_index == Some(index) {
-                        msg // send to SlotInfo to generate error
+                Message::Account(mut msg) => {
+                    if let Some(key) = DedupInfoAccountTransactionKey::try_create(&msg) {
+                        if dedup.accounts_transactions.insert(key) {
+                            match dedup.transactions.entry(key.signature) {
+                                HashMapEntry::Occupied(mut entry) => match entry.get_mut() {
+                                    DedupInfoTransactionIndex::Index(index) => {
+                                        update_write_version(&mut msg, *index as u64);
+                                        messages.push(ParsedMessage::Account(Arc::new(msg)));
+                                    }
+                                    DedupInfoTransactionIndex::Accounts(vec) => {
+                                        vec.push(msg);
+                                    }
+                                },
+                                HashMapEntry::Vacant(entry) => {
+                                    entry.insert(DedupInfoTransactionIndex::Accounts(vec![msg]));
+                                }
+                            }
+                        }
                     } else {
-                        dedup.accounts[index].push(msg);
-                        return;
+                        let msg = ParsedMessage::Account(Arc::new(msg));
+                        if dedup.block_index == Some(index) {
+                            messages.push(msg); // send to SlotInfo to generate error
+                        } else {
+                            dedup.accounts_phantom[index].push(msg);
+                        }
                     }
                 }
-                ParsedMessage::Transaction(msg) => {
+                Message::Transaction(msg) => {
                     let index = msg.index() as usize;
-                    if dedup.transactions.len() <= index {
-                        dedup
-                            .transactions
-                            .resize(dedup.transactions.len() * 2, false);
+                    match dedup.transactions.entry(*msg.signature()) {
+                        HashMapEntry::Occupied(mut entry) => {
+                            let entry = entry.get_mut();
+                            if let DedupInfoTransactionIndex::Accounts(vec) = entry {
+                                for mut msg in vec.drain(..) {
+                                    update_write_version(&mut msg, index as u64);
+                                    messages.push(ParsedMessage::Account(Arc::new(msg)));
+                                }
+
+                                *entry = DedupInfoTransactionIndex::Index(index);
+                                messages.push(ParsedMessage::Transaction(Arc::new(msg)));
+                            }
+                        }
+                        HashMapEntry::Vacant(entry) => {
+                            entry.insert(DedupInfoTransactionIndex::Index(index));
+                            messages.push(ParsedMessage::Transaction(Arc::new(msg)));
+                        }
                     }
-                    if dedup.transactions[index] {
-                        return;
-                    }
-                    dedup.transactions[index] = true;
-                    ParsedMessage::Transaction(msg)
                 }
-                ParsedMessage::Entry(msg) => {
+                Message::Entry(msg) => {
                     let index = msg.index() as usize;
                     if dedup.entries.len() <= index {
                         dedup.entries.resize(dedup.entries.len() * 2, false);
                     }
-                    if dedup.entries[index] {
-                        return;
+                    if !dedup.entries[index] {
+                        dedup.entries[index] = true;
+                        messages.push(ParsedMessage::Entry(Arc::new(msg)));
                     }
-                    dedup.entries[index] = true;
-                    ParsedMessage::Entry(msg)
                 }
-                ParsedMessage::BlockMeta(msg) => {
-                    if dedup.block_meta {
-                        return;
+                Message::BlockMeta(msg) => {
+                    if !dedup.block_meta {
+                        dedup.block_meta = true;
+                        messages.push(ParsedMessage::BlockMeta(Arc::new(msg)));
                     }
-                    dedup.block_meta = true;
-                    ParsedMessage::BlockMeta(msg)
                 }
-                ParsedMessage::Block(_) => unreachable!(),
+                Message::Block(_) => unreachable!(),
             };
 
-            let messages = self
-                .slots
-                .entry(slot)
-                .or_insert_with(|| SlotInfo::new(slot))
-                .get_messages_with_block(&message, Some(&mut dedup.accounts[index]));
-            if messages.is_some() {
-                dedup.block_index = Some(index);
-            }
-            MessagesWithBlockIter::new(message, messages)
+            Some((index, dedup))
         } else {
-            let messages = self
-                .slots
-                .entry(slot)
-                .or_insert_with(|| SlotInfo::new(slot))
-                .get_messages_with_block(&message, None);
-            MessagesWithBlockIter::new(message, messages)
+            messages.push(message.into());
+            None
         };
 
         // push messages
         for message in messages {
-            // push messages to confirmed / finalized
-            if let ParsedMessage::Slot(msg) = &message {
-                // update metrics
-                if let Some(commitment) = match msg.status() {
-                    SlotStatus::SlotProcessed => Some("processed"),
-                    SlotStatus::SlotConfirmed => Some("confirmed"),
-                    SlotStatus::SlotFinalized => Some("finalized"),
-                    _ => None,
-                } {
-                    gauge!(metrics::CHANNEL_SLOT, "commitment" => commitment).set(msg.slot() as f64)
-                }
-                if msg.status() == SlotStatus::SlotProcessed {
-                    let processed_slots_len = self.processed.shared.slots_lock().len();
-                    debug!(
-                        "new processed {slot} / {} messages / {} slots / {} bytes",
-                        self.processed.tail - self.processed.head,
-                        processed_slots_len,
-                        self.processed.bytes_total
-                    );
+            let messages_with_block = self
+                .slots
+                .entry(slot)
+                .or_insert_with(|| SlotInfo::new(slot))
+                .get_messages_with_block(
+                    &message,
+                    dedup_info
+                        .as_mut()
+                        .map(|(index, dedup)| &mut dedup.accounts_phantom[*index]),
+                );
+            if let (Some((index, dedup)), Some(_)) = (dedup_info.as_mut(), &messages_with_block) {
+                dedup.block_index = Some(*index);
+            }
 
-                    gauge!(metrics::CHANNEL_MESSAGES_TOTAL)
-                        .set((self.processed.tail - self.processed.head) as f64);
-                    gauge!(metrics::CHANNEL_SLOTS_TOTAL).set(processed_slots_len as f64);
-                    gauge!(metrics::CHANNEL_BYTES_TOTAL).set(self.processed.bytes_total as f64);
+            for message in MessagesWithBlockIter::new(message, messages_with_block) {
+                // push messages to confirmed / finalized
+                if let ParsedMessage::Slot(msg) = &message {
+                    // update metrics
+                    if let Some(commitment) = match msg.status() {
+                        SlotStatus::SlotProcessed => Some("processed"),
+                        SlotStatus::SlotConfirmed => Some("confirmed"),
+                        SlotStatus::SlotFinalized => Some("finalized"),
+                        _ => None,
+                    } {
+                        gauge!(metrics::CHANNEL_SLOT, "commitment" => commitment)
+                            .set(msg.slot() as f64)
+                    }
+                    if msg.status() == SlotStatus::SlotProcessed {
+                        let processed_slots_len = self.processed.shared.slots_lock().len();
+                        debug!(
+                            "new processed {slot} / {} messages / {} slots / {} bytes",
+                            self.processed.tail - self.processed.head,
+                            processed_slots_len,
+                            self.processed.bytes_total
+                        );
+
+                        gauge!(metrics::CHANNEL_MESSAGES_TOTAL)
+                            .set((self.processed.tail - self.processed.head) as f64);
+                        gauge!(metrics::CHANNEL_SLOTS_TOTAL).set(processed_slots_len as f64);
+                        gauge!(metrics::CHANNEL_BYTES_TOTAL).set(self.processed.bytes_total as f64);
+                    }
+
+                    if msg.status() == SlotStatus::SlotConfirmed {
+                        self.slot_confirmed = slot;
+                        if let Some(shared) = self.confirmed.as_mut() {
+                            if let Some(slot_info) = self.slots.get(&slot) {
+                                for message in slot_info.get_messages_cloned() {
+                                    shared.push(slot, message);
+                                }
+                            }
+                        }
+                    }
+
+                    if msg.status() == SlotStatus::SlotFinalized {
+                        self.slot_finalized = slot;
+                        if let Some(shared) = self.finalized.as_mut() {
+                            if let Some(mut slot_info) = self.slots.remove(&slot) {
+                                for message in slot_info.get_messages_owned() {
+                                    shared.push(slot, message);
+                                }
+                            }
+                        }
+                    }
+
+                    // remove slot info
+                    if msg.status() == SlotStatus::SlotFinalized {
+                        loop {
+                            match self.slots.keys().next().copied() {
+                                Some(slot_min) if slot_min <= slot => {
+                                    self.slots.remove(&slot_min);
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
                 }
 
-                if msg.status() == SlotStatus::SlotConfirmed {
-                    self.slot_confirmed = slot;
+                // push to confirmed and finalized (if we received SlotStatus or message after it)
+                if slot <= self.slot_confirmed {
                     if let Some(shared) = self.confirmed.as_mut() {
-                        if let Some(slot_info) = self.slots.get(&slot) {
-                            for message in slot_info.get_messages_cloned() {
-                                shared.push(slot, message);
-                            }
-                        }
+                        shared.push(slot, message.clone());
                     }
                 }
-
-                if msg.status() == SlotStatus::SlotFinalized {
-                    self.slot_finalized = slot;
+                if slot <= self.slot_finalized {
                     if let Some(shared) = self.finalized.as_mut() {
-                        if let Some(mut slot_info) = self.slots.remove(&slot) {
-                            for message in slot_info.get_messages_owned() {
-                                shared.push(slot, message);
-                            }
-                        }
+                        shared.push(slot, message.clone());
                     }
                 }
 
-                // remove slot info
-                if msg.status() == SlotStatus::SlotFinalized {
-                    loop {
-                        match self.slots.keys().next().copied() {
-                            Some(slot_min) if slot_min <= slot => {
-                                self.slots.remove(&slot_min);
-                            }
-                            _ => break,
-                        }
-                    }
-                }
+                // push to processed
+                self.processed.push(slot, message);
             }
-
-            // push to confirmed and finalized (if we received SlotStatus or message after it)
-            if slot <= self.slot_confirmed {
-                if let Some(shared) = self.confirmed.as_mut() {
-                    shared.push(slot, message.clone());
-                }
-            }
-            if slot <= self.slot_finalized {
-                if let Some(shared) = self.finalized.as_mut() {
-                    shared.push(slot, message.clone());
-                }
-            }
-
-            // push to processed
-            self.processed.push(slot, message);
         }
 
         if let Some(mut wakers) = self.processed.shared.wakers_lock() {
@@ -777,7 +812,7 @@ impl SlotInfo {
     fn get_messages_with_block(
         &mut self,
         message: &ParsedMessage,
-        deduped_accounts: Option<&mut Vec<ParsedMessage>>,
+        deduped_accounts: Option<&mut SmallVec<[ParsedMessage; 8]>>,
     ) -> Option<MessagesWithBlock> {
         // mark as landed
         if let ParsedMessage::Slot(message) = message {
@@ -913,13 +948,13 @@ impl SlotInfo {
 
 #[derive(Debug)]
 struct MessagesWithBlock {
-    accounts: Vec<ParsedMessage>,
+    accounts: SmallVec<[ParsedMessage; 8]>,
     block: ParsedMessage,
 }
 
 #[derive(Debug)]
 struct MessagesWithBlockIter {
-    accounts: std::vec::IntoIter<ParsedMessage>,
+    accounts: Option<smallvec::IntoIter<[ParsedMessage; 8]>>,
     message: Option<ParsedMessage>,
     block: Option<ParsedMessage>,
 }
@@ -928,18 +963,22 @@ impl Iterator for MessagesWithBlockIter {
     type Item = ParsedMessage;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.accounts
-            .next()
-            .or_else(|| self.message.take())
-            .or_else(|| self.block.take())
+        if let Some(accounts) = self.accounts.as_mut() {
+            if let Some(message) = accounts.next() {
+                return Some(message);
+            }
+        }
+        self.message.take().or_else(|| self.block.take())
     }
 }
 
 impl MessagesWithBlockIter {
     fn new(message: ParsedMessage, messages: Option<MessagesWithBlock>) -> Self {
         let (accounts, block) = match messages {
-            Some(MessagesWithBlock { accounts, block }) => (accounts.into_iter(), Some(block)),
-            None => (Vec::new().into_iter(), None),
+            Some(MessagesWithBlock { accounts, block }) => {
+                (Some(accounts.into_iter()), Some(block))
+            }
+            None => (None, None),
         };
 
         Self {
@@ -953,24 +992,322 @@ impl MessagesWithBlockIter {
 #[derive(Debug)]
 struct DedupInfo {
     slots: [bool; 7],
-    accounts: Vec<Vec<ParsedMessage>>,
-    transactions: Vec<bool>,
+    accounts_phantom: Vec<SmallVec<[ParsedMessage; 8]>>,
+    accounts_transactions: HashSet<DedupInfoAccountTransactionKey>,
+    transactions: HashMap<Signature, DedupInfoTransactionIndex>,
     entries: Vec<bool>,
     block_meta: bool,
     block_index: Option<usize>,
 }
 
 impl DedupInfo {
-    fn new(streams: usize) -> Self {
+    fn new(streams_total: usize) -> Self {
         Self {
             slots: [false; 7],
-            accounts: std::iter::repeat_with(|| Vec::with_capacity(8_192))
-                .take(streams)
+            accounts_phantom: std::iter::repeat_with(SmallVec::new)
+                .take(streams_total)
                 .collect(),
-            transactions: std::iter::repeat(false).take(8_192).collect(),
+            accounts_transactions: HashSet::with_capacity(8_192),
+            transactions: HashMap::with_capacity(8_192),
             entries: std::iter::repeat(false).take(256).collect(),
             block_meta: false,
             block_index: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DedupInfoAccountTransactionKey {
+    signature: Signature,
+    pubkey: Pubkey,
+}
+
+impl DedupInfoAccountTransactionKey {
+    fn try_create(msg: &MessageAccount) -> Option<Self> {
+        let signature = match msg {
+            MessageAccount::Limited {
+                txn_signature_offset,
+                buffer,
+                ..
+            } => txn_signature_offset.map(|offset| &buffer.as_slice()[offset..offset + 64]),
+            MessageAccount::Prost { account, .. } => account.txn_signature.as_deref(),
+        };
+
+        signature.map(|signature| Self {
+            signature: signature.try_into().expect("valid signature"),
+            pubkey: *msg.pubkey(),
+        })
+    }
+}
+
+#[derive(Debug)]
+enum DedupInfoTransactionIndex {
+    Index(usize),
+    Accounts(Vec<MessageAccount>),
+}
+
+fn update_write_version(msg: &mut MessageAccount, write_version: u64) {
+    match msg {
+        MessageAccount::Limited {
+            buffer,
+            range,
+            account_offset,
+            write_version: write_version_current,
+            data,
+            txn_signature_offset,
+            ..
+        } => {
+            // calculate current and new len of write_version
+            let mut buf = &mut &buffer.as_slice()[*write_version_current..];
+            let start = buf.remaining();
+            decode_varint(&mut buf).expect("already verified");
+            let wv_size_current = start - buf.remaining();
+            let wv_size_new = encoded_len_varint(write_version);
+
+            // calculate current and new len of account msg
+            let mut buf = &mut &buffer.as_slice()[*account_offset..];
+            let start = buf.remaining();
+            let msg_size = decode_varint(&mut buf).expect("already verified");
+            let msg_size_current = start - buf.remaining();
+            let msg_size = msg_size + wv_size_new as u64 - wv_size_current as u64;
+            let msg_size_new = encoded_len_varint(msg_size);
+
+            // resize if required
+            let new_end =
+                range.end + msg_size_new - msg_size_current + wv_size_new - wv_size_current;
+            if new_end > buffer.len() {
+                buffer.resize(new_end, 0);
+            }
+
+            // copy data before write_version
+            unsafe {
+                let end_current = *account_offset + msg_size_current;
+                let end_new = *account_offset + msg_size_new;
+                std::ptr::copy(
+                    buffer.as_ptr().add(end_current),
+                    buffer.as_mut_ptr().add(end_new),
+                    *write_version_current - end_current,
+                );
+            }
+
+            // copy data after write_version
+            let write_version_new = *write_version_current + msg_size_new - msg_size_current;
+            unsafe {
+                let end_current = *write_version_current + wv_size_current;
+                let end_new = write_version_new + wv_size_new;
+                std::ptr::copy(
+                    buffer.as_ptr().add(end_current),
+                    buffer.as_mut_ptr().add(end_new),
+                    range.end - end_current,
+                );
+            }
+
+            // save new message size and write_version
+            encode_varint(msg_size, &mut &mut buffer.as_mut_slice()[*account_offset..]);
+            encode_varint(
+                write_version,
+                &mut &mut buffer.as_mut_slice()[write_version_new..],
+            );
+
+            // update offsets
+            range.end = new_end;
+            // update msg_size anyway
+            data.start = data.start + msg_size_new - msg_size_current;
+            data.end = data.end + msg_size_new - msg_size_current;
+            if data.start > write_version_new {
+                data.start = data.start + wv_size_new - wv_size_current;
+                data.end = data.end + wv_size_new - wv_size_current;
+            }
+            if let Some(txn_signature_offset) = txn_signature_offset {
+                *txn_signature_offset = *txn_signature_offset + msg_size_new - msg_size_current;
+                if *txn_signature_offset > write_version_new {
+                    *txn_signature_offset = *txn_signature_offset + wv_size_new - wv_size_current;
+                }
+            }
+            *write_version_current = write_version_new;
+        }
+        MessageAccount::Prost { account, size, .. } => {
+            *size = *size + encoded_len_varint(write_version)
+                - encoded_len_varint(account.write_version);
+            account.write_version = write_version;
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::update_write_version,
+        maplit::hashmap,
+        richat_filter::{
+            config::{ConfigFilter, ConfigFilterAccounts, ConfigFilterAccountsDataSlice},
+            filter::Filter,
+            message::{Message, MessageAccount, MessageParserEncoding, MessageRef},
+        },
+        solana_account::ReadableAccount,
+        solana_sdk::commitment_config::CommitmentLevel,
+    };
+
+    static MESSAGE: &str = "0a0012af010aa6010a2088f1ffa3a2dfe617bdc4e3573251a322e3fcae81e5a457390e64751c00a465e210e0d54a1a2006aa09548b50476ad462f91f89a3015033264fc9abd5270020a9d142334742fb28ffffffffffffffffff013208c921f474e044612838e3e1acc2b53042405bd620fab28d3c0b78b3ead9f04d1c4d6dffeac4ffa7c679a6570b0226557c10b4c4016d937e06044b4e49d9d7916524d5dfa26297c5f638c3d11f846410bc0510e5ddaca2015a0c08e1c79ec10610ebef838601";
+
+    fn parse(data: Vec<u8>, parser: MessageParserEncoding) -> MessageAccount {
+        if let Message::Account(msg) = Message::parse(data, parser).expect("valid message") {
+            assert!(
+                match parser {
+                    MessageParserEncoding::Prost => matches!(msg, MessageAccount::Prost { .. }),
+                    MessageParserEncoding::Limited => matches!(msg, MessageAccount::Limited { .. }),
+                },
+                "unexpected msg encoding"
+            );
+
+            msg
+        } else {
+            panic!("expected account message");
+        }
+    }
+
+    fn encode(msg: &MessageAccount, data_slice: Option<(u64, u64)>) -> Vec<u8> {
+        let filter = Filter::new(&ConfigFilter {
+            accounts: hashmap! { "".to_owned() => ConfigFilterAccounts::default() },
+            accounts_data_slice: data_slice
+                .map(|(offset, length)| vec![ConfigFilterAccountsDataSlice { offset, length }])
+                .unwrap_or_default(),
+            ..Default::default()
+        });
+
+        let message = Message::Account(msg.clone());
+        let message_ref: MessageRef = (&message).into();
+
+        let updates = filter.get_updates_ref(message_ref, CommitmentLevel::Processed);
+        assert_eq!(updates.len(), 1, "unexpected number of updates");
+        updates[0].encode()
+    }
+
+    #[test]
+    fn test_limited() {
+        let mut msg = parse(
+            const_hex::decode(MESSAGE).expect("valid hex"),
+            MessageParserEncoding::Limited,
+        );
+        assert_eq!(msg.write_version(), 1663633666275, "valid write version");
+
+        update_write_version(&mut msg, 1);
+        assert_eq!(msg.write_version(), 1, "dec valid write version");
+        let mut msg2 = parse(encode(&msg, None), MessageParserEncoding::Limited);
+        if let (
+            MessageAccount::Limited { buffer, .. },
+            MessageAccount::Limited {
+                buffer: buffer2, ..
+            },
+        ) = (&msg, &mut msg2)
+        {
+            *buffer2 = buffer.clone(); // ignore buffer
+        }
+        assert_eq!(msg, msg2, "write version update failed");
+        // check with data slice
+        let mut msg2 = parse(encode(&msg, Some((1, 3))), MessageParserEncoding::Limited);
+        assert_eq!(msg.write_version(), msg2.write_version());
+        assert_eq!(&msg.data()[1..4], msg2.data());
+        if let (
+            MessageAccount::Limited {
+                buffer,
+                txn_signature_offset,
+                write_version,
+                data,
+                range,
+                ..
+            },
+            MessageAccount::Limited {
+                buffer: buffer2,
+                txn_signature_offset: txn_signature_offset2,
+                write_version: write_version2,
+                data: data2,
+                range: range2,
+                ..
+            },
+        ) = (&msg, &mut msg2)
+        {
+            let txn_offset = txn_signature_offset.unwrap();
+            let txn_offset2 = txn_signature_offset2.unwrap();
+            assert_eq!(
+                &buffer[txn_offset..txn_offset + 64],
+                &buffer2[txn_offset2..txn_offset2 + 64]
+            );
+            *buffer2 = buffer.clone(); // ignore buffer
+            *txn_signature_offset2 = *txn_signature_offset;
+            *write_version2 = *write_version;
+            *data2 = data.clone();
+            *range2 = range.clone();
+        }
+        assert_eq!(msg, msg2, "write version update failed");
+
+        update_write_version(&mut msg, u64::MAX);
+        assert_eq!(msg.write_version(), u64::MAX, "inc valid write version");
+        let mut msg2 = parse(encode(&msg, None), MessageParserEncoding::Limited);
+        if let (
+            MessageAccount::Limited { buffer, .. },
+            MessageAccount::Limited {
+                buffer: buffer2, ..
+            },
+        ) = (&msg, &mut msg2)
+        {
+            *buffer2 = buffer.clone(); // ignore buffer
+        }
+        assert_eq!(msg, msg2, "write version update failed");
+        // check with data slice
+        let mut msg2 = parse(encode(&msg, Some((1, 3))), MessageParserEncoding::Limited);
+        assert_eq!(msg.write_version(), msg2.write_version());
+        assert_eq!(&msg.data()[1..4], msg2.data());
+        if let (
+            MessageAccount::Limited {
+                buffer,
+                txn_signature_offset,
+                write_version,
+                data,
+                range,
+                ..
+            },
+            MessageAccount::Limited {
+                buffer: buffer2,
+                txn_signature_offset: txn_signature_offset2,
+                write_version: write_version2,
+                data: data2,
+                range: range2,
+                ..
+            },
+        ) = (&msg, &mut msg2)
+        {
+            let txn_offset = txn_signature_offset.unwrap();
+            let txn_offset2 = txn_signature_offset2.unwrap();
+            assert_eq!(
+                &buffer[txn_offset..txn_offset + 64],
+                &buffer2[txn_offset2..txn_offset2 + 64]
+            );
+            *buffer2 = buffer.clone(); // ignore buffer
+            *txn_signature_offset2 = *txn_signature_offset;
+            *write_version2 = *write_version;
+            *data2 = data.clone();
+            *range2 = range.clone();
+        }
+        assert_eq!(msg, msg2, "write version update failed");
+    }
+
+    #[test]
+    fn test_prost() {
+        let mut msg = parse(
+            const_hex::decode(MESSAGE).expect("valid hex"),
+            MessageParserEncoding::Prost,
+        );
+        assert_eq!(msg.write_version(), 1663633666275, "valid write version");
+
+        update_write_version(&mut msg, 1);
+        assert_eq!(msg.write_version(), 1, "dec valid write version");
+        let msg2 = parse(encode(&msg, None), MessageParserEncoding::Prost);
+        assert_eq!(msg, msg2, "write version update failed");
+
+        update_write_version(&mut msg, u64::MAX);
+        assert_eq!(msg.write_version(), u64::MAX, "inc valid write version");
+        let msg2 = parse(encode(&msg, None), MessageParserEncoding::Prost);
+        assert_eq!(msg, msg2, "write version update failed");
     }
 }
