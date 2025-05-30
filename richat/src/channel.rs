@@ -413,6 +413,15 @@ impl Sender {
                         gauge!(metrics::CHANNEL_BYTES_TOTAL).set(self.processed.bytes_total as f64);
                     }
 
+                    // push slot message to confirmed / finalized
+                    if let Some(shared) = self.confirmed.as_mut() {
+                        shared.push(slot, message.clone());
+                    }
+                    if let Some(shared) = self.finalized.as_mut() {
+                        shared.push(slot, message.clone());
+                    }
+
+                    // push messages to confirmed
                     if msg.status() == SlotStatus::SlotConfirmed {
                         self.slot_confirmed = slot;
                         if let Some(shared) = self.confirmed.as_mut() {
@@ -424,6 +433,7 @@ impl Sender {
                         }
                     }
 
+                    // push messages to finalized
                     if msg.status() == SlotStatus::SlotFinalized {
                         self.slot_finalized = slot;
                         if let Some(shared) = self.finalized.as_mut() {
@@ -446,17 +456,17 @@ impl Sender {
                             }
                         }
                     }
-                }
-
-                // push to confirmed and finalized (if we received SlotStatus or message after it)
-                if slot <= self.slot_confirmed {
-                    if let Some(shared) = self.confirmed.as_mut() {
-                        shared.push(slot, message.clone());
+                } else {
+                    // push to confirmed and finalized (if we received SlotStatus or message after it)
+                    if slot <= self.slot_confirmed {
+                        if let Some(shared) = self.confirmed.as_mut() {
+                            shared.push(slot, message.clone());
+                        }
                     }
-                }
-                if slot <= self.slot_finalized {
-                    if let Some(shared) = self.finalized.as_mut() {
-                        shared.push(slot, message.clone());
+                    if slot <= self.slot_finalized {
+                        if let Some(shared) = self.finalized.as_mut() {
+                            shared.push(slot, message.clone());
+                        }
                     }
                 }
 
