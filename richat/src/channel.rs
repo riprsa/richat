@@ -142,7 +142,6 @@ impl Messages {
         Sender {
             slots: BTreeMap::new(),
             dedup: BTreeMap::new(),
-            finalized_slot: 0,
             processed: SenderShared::new(&self.shared_processed, self.max_messages, self.max_bytes),
             confirmed: self
                 .shared_confirmed
@@ -165,44 +164,47 @@ impl Messages {
         }
     }
 
-    pub fn get_current_tail(
+    const fn get_shared(&self, commitment: CommitmentLevel) -> &Arc<Shared> {
+        match commitment {
+            CommitmentLevel::Processed => &self.shared_processed,
+            CommitmentLevel::Confirmed => {
+                self.shared_confirmed.as_ref().expect("should be defined")
+            }
+            CommitmentLevel::Finalized => {
+                self.shared_finalized.as_ref().expect("should be defined")
+            }
+        }
+    }
+
+    pub fn get_current_tail(&self, commitment: CommitmentLevel) -> u64 {
+        self.get_shared(commitment).tail.load(Ordering::Relaxed)
+    }
+
+    pub fn get_current_tail_with_replay(
         &self,
         commitment: CommitmentLevel,
         replay_from_slot: Option<Slot>,
-    ) -> Option<u64> {
-        let shared = (match commitment {
-            CommitmentLevel::Processed => Some(&self.shared_processed),
-            CommitmentLevel::Confirmed => self.shared_confirmed.as_ref(),
-            CommitmentLevel::Finalized => self.shared_finalized.as_ref(),
-        })?;
-
+    ) -> Result<u64, String> {
         if let Some(replay_from_slot) = replay_from_slot {
-            shared
-                .slots_lock()
-                .get(&replay_from_slot)
-                .map(|obj| obj.head)
+            if commitment == CommitmentLevel::Processed {
+                self.get_shared(commitment)
+                    .slots_lock()
+                    .get(&replay_from_slot)
+                    .map(|obj| obj.head)
+                    .ok_or_else(|| {
+                        format!("failed to get replay position for slot {replay_from_slot}")
+                    })
+            } else {
+                Err("replay `from_slot` available only for `processed` commitment".to_owned())
+            }
         } else {
-            Some(shared.tail.load(Ordering::Relaxed))
+            Ok(self.get_shared(commitment).tail.load(Ordering::Relaxed))
         }
     }
 
     pub fn get_first_available_slot(&self) -> Option<Slot> {
-        let slot = self
-            .shared_processed
-            .slots_lock()
-            .first_key_value()
-            .map(|(slot, _head)| *slot)?;
-        if let Some(shared) = self.shared_confirmed.as_ref() {
-            if !shared.slots_lock().contains_key(&slot) {
-                return None;
-            }
-        }
-        if let Some(shared) = self.shared_finalized.as_ref() {
-            if !shared.slots_lock().contains_key(&slot) {
-                return None;
-            }
-        }
-        Some(slot)
+        let slots = self.shared_processed.slots_lock();
+        slots.first_key_value().map(|(slot, _head)| *slot)
     }
 }
 
@@ -247,7 +249,6 @@ impl Subscribe for Messages {
 pub struct Sender {
     slots: BTreeMap<Slot, SlotInfo>,
     dedup: BTreeMap<Slot, DedupInfo>,
-    finalized_slot: Slot,
     processed: SenderShared,
     confirmed: Option<SenderShared>,
     finalized: Option<SenderShared>,
@@ -259,29 +260,14 @@ impl Sender {
     pub fn push(&mut self, message: Message, index_info: Option<(usize, usize)>) {
         let slot = message.slot();
 
+        // early return, probably nothing can be received after finalized slot status?
+        if slot <= self.slot_finalized {
+            return;
+        }
+
         // get or create slot info
         let mut messages = SmallVec::<[ParsedMessage; 16]>::new();
         let mut dedup_info = if let Some((index, streams_total)) = index_info {
-            // return if we already processed and removed dedup for finalized slots
-            if slot <= self.finalized_slot {
-                return;
-            }
-
-            // remove outdated info
-            if let Message::Slot(msg) = &message {
-                if msg.status() == SlotStatus::SlotFinalized {
-                    self.finalized_slot = slot;
-                    loop {
-                        match self.dedup.keys().next().copied() {
-                            Some(slot_min) if slot_min < self.finalized_slot => {
-                                self.dedup.remove(&slot_min);
-                            }
-                            _ => break,
-                        }
-                    }
-                }
-            }
-
             // dedup info
             let dedup = self
                 .dedup
@@ -370,6 +356,7 @@ impl Sender {
         };
 
         // push messages
+        let mut clean_after_finalized = false;
         for message in messages {
             let messages_with_block = self
                 .slots
@@ -386,7 +373,7 @@ impl Sender {
             }
 
             for message in MessagesWithBlockIter::new(message, messages_with_block) {
-                // push messages to confirmed / finalized
+                // update metrics, push messages to confirmed / finalized
                 if let ParsedMessage::Slot(msg) = &message {
                     // update metrics
                     if let Some(commitment) = match msg.status() {
@@ -435,24 +422,13 @@ impl Sender {
 
                     // push messages to finalized
                     if msg.status() == SlotStatus::SlotFinalized {
+                        clean_after_finalized = true;
                         self.slot_finalized = slot;
                         if let Some(shared) = self.finalized.as_mut() {
                             if let Some(mut slot_info) = self.slots.remove(&slot) {
                                 for message in slot_info.get_messages_owned() {
                                     shared.push(slot, message);
                                 }
-                            }
-                        }
-                    }
-
-                    // remove slot info
-                    if msg.status() == SlotStatus::SlotFinalized {
-                        loop {
-                            match self.slots.keys().next().copied() {
-                                Some(slot_min) if slot_min <= slot => {
-                                    self.slots.remove(&slot_min);
-                                }
-                                _ => break,
                             }
                         }
                     }
@@ -463,15 +439,29 @@ impl Sender {
                             shared.push(slot, message.clone());
                         }
                     }
-                    if slot <= self.slot_finalized {
-                        if let Some(shared) = self.finalized.as_mut() {
-                            shared.push(slot, message.clone());
-                        }
-                    }
                 }
 
                 // push to processed
                 self.processed.push(slot, message);
+            }
+        }
+
+        if clean_after_finalized {
+            loop {
+                match self.slots.keys().next().copied() {
+                    Some(slot_min) if slot_min <= self.slot_finalized => {
+                        self.slots.remove(&slot_min);
+                    }
+                    _ => break,
+                }
+            }
+            loop {
+                match self.dedup.keys().next().copied() {
+                    Some(slot_min) if slot_min < self.slot_finalized => {
+                        self.dedup.remove(&slot_min);
+                    }
+                    _ => break,
+                }
             }
         }
 
