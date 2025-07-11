@@ -1,6 +1,6 @@
 [package]
 name = "richat"
-version = "3.7.0"
+version = "4.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Richat App"
@@ -12,6 +12,7 @@ publish = { workspace = true }
 
 [dependencies]
 affinity-linux = { workspace = true }
+agave-reserved-account-keys = { workspace = true }
 anyhow = { workspace = true }
 arrayvec = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
