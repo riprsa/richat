@@ -3920,7 +3920,7 @@ dependencies = [
 
 [[package]]
 name = "richat"
-version = "4.0.1"
+version = "4.1.0"
 dependencies = [
  "affinity-linux",
  "agave-reserved-account-keys",
@@ -3948,6 +3948,7 @@ dependencies = [
  "rayon",
  "richat-client",
  "richat-filter",
+ "richat-metrics",
  "richat-proto",
  "richat-shared",
  "rustls 0.23.29",
@@ -4056,8 +4057,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "richat-metrics"
+version = "1.0.0"
+dependencies = [
+ "http 1.3.1",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "metrics",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "richat-plugin-agave"
-version = "4.0.1"
+version = "4.1.0"
 dependencies = [
  "agave-geyser-plugin-interface",
  "anyhow",
@@ -4068,11 +4083,11 @@ dependencies = [
  "futures",
  "git-version",
  "log",
- "metrics",
  "metrics-exporter-prometheus",
  "prost 0.11.9",
  "prost 0.13.5",
  "prost-types 0.13.5",
+ "richat-metrics",
  "richat-proto",
  "richat-shared",
  "rustls 0.23.29",
@@ -4102,7 +4117,7 @@ dependencies = [
 
 [[package]]
 name = "richat-shared"
-version = "4.0.0"
+version = "4.1.0"
 dependencies = [
  "affinity-linux",
  "anyhow",
@@ -4111,11 +4126,9 @@ dependencies = [
  "five8",
  "futures",
  "hostname",
- "http 1.3.1",
  "http-body-util",
  "humantime-serde",
  "hyper",
- "hyper-util",
  "jsonrpc-core",
  "jsonrpsee-types",
  "metrics",
@@ -4125,6 +4138,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "regex",
+ "richat-metrics",
  "richat-proto",
  "rustls 0.23.29",
  "rustls-pemfile",
@@ -4630,9 +4644,9 @@ checksum = "c1e9a774a6c28142ac54bb25d25562e6bcf957493a184f15ad4eebccb23e410a"
 
 [[package]]
 name = "slab"
-version = "0.4.10"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04dc19736151f35336d325007ac991178d504a119863a2fcb3758cdb5e52c50d"
+checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 
 [[package]]
 name = "smallvec"
