@@ -26,10 +26,13 @@ pub fn get_x_bigtable_disabled(headers: &HeaderMap) -> bool {
     headers.get(X_BIGTABLE).is_some_and(|v| v == "disabled")
 }
 
-pub fn response_200<D: Into<Bytes>>(data: D) -> HttpResult<RpcResponse> {
-    hyper::Response::builder()
-        .header(CONTENT_TYPE, "application/json; charset=utf-8")
-        .body(BodyFull::from(data.into()).boxed())
+pub fn response_200<D: Into<Bytes>>(data: D, extra_headers: &HeaderMap) -> HttpResult<RpcResponse> {
+    let mut builder =
+        hyper::Response::builder().header(CONTENT_TYPE, "application/json; charset=utf-8");
+    for (key, value) in extra_headers {
+        builder = builder.header(key, value);
+    }
+    builder.body(BodyFull::from(data.into()).boxed())
 }
 
 pub fn response_400<E: fmt::Display>(error: E) -> HttpResult<RpcResponse> {
