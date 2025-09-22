@@ -139,7 +139,7 @@ apps:
   #     enabled: true
   #     affinity: null # by default no affinity (taskset syntax)
   #     requests_queue_size: 100
-  #   filters:
+  #   filter_limits:
   #     name_max: 128
   #     accounts:
   #       max: 1
